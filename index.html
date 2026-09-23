@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Planejamento de Estudos</title>
+  <meta name="description" content="Planejamento semanal do extensivo Medcurso, com revisões espaçadas e aulas bônus priorizadas.">
+  <meta name="theme-color" content="#202B36">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icone-192.png">
+  <link rel="apple-touch-icon" href="./icons/icone-180.png">
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; background: #0F151B; color: #E7EDF2; }
+    body { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #7FC4BE; outline-offset: 2px; }
+    #raiz > .carregando { padding: 24px; font: 14px system-ui, sans-serif; color: #8FA0AE; }
+  </style>
+</head>
+<body>
+  <div id="raiz"><div class="carregando">Carregando…</div></div>
+  <script src="./firebase-config.js"></script>
+  <script src="./vendor/react.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
