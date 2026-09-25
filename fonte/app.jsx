@@ -1,5 +1,5 @@
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.3.0";
 
 /* ============================================================
    PLANEJAMENTO DE ESTUDOS — residência 2027
@@ -190,7 +190,7 @@ const DEFAULT_CFG = {
   pendentesForcados: [],                                   // nenhuma aula anterior em aberto
   // aula assistida, questões e revisões pendentes ("semana" ou "semana|área")
   somenteAulas: ["33|PEDIATRIA", "34|PEDIATRIA", "35", "36", "37"],
-  bancaFoco: "ambas", incluirBaixaPrioridade: true,
+  bancaFoco: "ambas", incluirBaixaPrioridade: true, semanasAdiamentoBonus: 4,
   ankiMapa: {}, ankiAuto: true,
   provisorio: true,
 };
@@ -254,7 +254,7 @@ function fatorCarga(seg, cfg) {
   return 1;
 }
 
-function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set()) {
+function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdiado = {}) {
   const seg0 = sabado(hoje);
   const nAdi = (id) => adiados[id] || 0;
 
@@ -340,7 +340,11 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set()) {
   });
   fQuest.forEach((q) => por(q, Math.max(min0(q), q.venc <= hoje ? 0 : semanaDe(q.venc)), false));
   fRev.forEach((r) => por(r, Math.max(min0(r), r.venc <= hoje ? 0 : semanaDe(r.venc)), false));
-  fBonus.forEach((b) => por(b, min0(b), false));
+  fBonus.forEach((b) => {
+    const ate = bonusAdiado[b.id];                       // trocada: só volta a partir dessa semana
+    const iAdiado = ate ? Math.max(0, Math.ceil(diffDays(seg0, ate) / 7)) : 0;
+    por(b, Math.max(min0(b), iAdiado), false);
+  });
 
   const ordem = { aula: 0, questoes: 1, revisao: 2, bonus: 3 };
   semanas.forEach((s) => s.itens.sort((a, b) => b.adiado - a.adiado || ordem[a.tipo] - ordem[b.tipo]
@@ -369,7 +373,8 @@ function paraNuvem(st) {
   st.blocos.forEach((b) => { blocos[b.id] = { etapa: b.etapa, dataAula: b.dataAula || null, dataUltima: b.dataUltima || null, hist: b.hist || {} }; });
   const bonus = {};
   st.bonus.forEach((x) => { bonus[x.id] = !!x.feito; });
-  return { cfg: st.cfg, blocos, bonus, registro: st.registro, adiados: st.adiados, excluidos: st.excluidos, anki: st.anki || {} };
+  return { cfg: st.cfg, blocos, bonus, registro: st.registro, adiados: st.adiados, excluidos: st.excluidos,
+    anki: st.anki || {}, bonusAdiado: st.bonusAdiado || {} };
 }
 // formato da nuvem -> estado do app (dados fixos vêm do código)
 function daNuvem(d) {
@@ -385,7 +390,8 @@ function daNuvem(d) {
   Object.entries(d.registro || {}).forEach(([k, r]) => {
     registro[k] = { planejados: r.planejados || [], feitos: r.feitos || [], fechada: !!r.fechada, auto: r.auto || {}, manual: r.manual || {} };
   });
-  return { cfg, blocos, bonus, registro, adiados: d.adiados || {}, excluidos: d.excluidos || {}, anki: d.anki || {} };
+  return { cfg, blocos, bonus, registro, adiados: d.adiados || {}, excluidos: d.excluidos || {},
+    anki: d.anki || {}, bonusAdiado: d.bonusAdiado || {} };
 }
 const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -402,6 +408,10 @@ function diferenca(ant, nov, F) {
     if (ant.adiados[id] !== nov.adiados[id]) put("adiados", id, nov.adiados[id] === undefined ? F.deleteField() : nov.adiados[id]);
   });
   Object.keys(nov.anki || {}).forEach((id) => { if (!igual((ant.anki || {})[id], nov.anki[id])) put("anki", id, nov.anki[id]); });
+  Object.keys({ ...(ant.bonusAdiado || {}), ...(nov.bonusAdiado || {}) }).forEach((id) => {
+    const va = (ant.bonusAdiado || {})[id], vb = (nov.bonusAdiado || {})[id];
+    if (va !== vb) put("bonusAdiado", id, vb === undefined ? F.deleteField() : vb);
+  });
   Object.keys(nov.excluidos).forEach((k) => {
     const a = ant.excluidos[k] || [], b = nov.excluidos[k] || [];
     const add = b.filter((x) => !a.includes(x));
@@ -434,7 +444,7 @@ function diferenca(ant, nov, F) {
   });
   return n ? p : null;
 }
-const VAZIO_NUVEM = { cfg: {}, blocos: {}, bonus: {}, registro: {}, adiados: {}, excluidos: {}, anki: {} };
+const VAZIO_NUVEM = { cfg: {}, blocos: {}, bonus: {}, registro: {}, adiados: {}, excluidos: {}, anki: {}, bonusAdiado: {} };
 
 const Sync = {
   status: "local", user: null, erro: "", pendente: false,
@@ -746,6 +756,7 @@ function App() {
   const [adiados, setAdiados] = useState({});
   const [excluidos, setExcluidos] = useState({});
   const [anki, setAnki] = useState({});
+  const [bonusAdiado, setBonusAdiado] = useState({});
   const [aba, setAba] = useState("semana");
   const hoje = hojeISO();
   const segAtual = sabado(hoje);
@@ -753,11 +764,12 @@ function App() {
   const sync = useSync();
   const temAtualizacao = useAtualizacao();
   const atual = useRef(null);
-  atual.current = { blocos, bonus, cfg, registro, adiados, excluidos, anki };
+  atual.current = { blocos, bonus, cfg, registro, adiados, excluidos, anki, bonusAdiado };
 
   const aplicarEstado = useCallback((d) => {
     setCfg(d.cfg); setBlocos(d.blocos); setBonus(d.bonus);
     setRegistro(d.registro); setAdiados(d.adiados); setExcluidos(d.excluidos); setAnki(d.anki || {});
+    setBonusAdiado(d.bonusAdiado || {});
   }, []);
 
   useEffect(() => {
@@ -767,7 +779,7 @@ function App() {
       setCfg(c);
       setBlocos(d?.blocos?.length ? d.blocos : seed(c, hoje));
       setBonus(d?.bonus?.length ? d.bonus : seedBonus());
-      setRegistro(d?.registro || {}); setAdiados(d?.adiados || {}); setExcluidos(d?.excluidos || {}); setAnki(d?.anki || {});
+      setRegistro(d?.registro || {}); setAdiados(d?.adiados || {}); setExcluidos(d?.excluidos || {}); setAnki(d?.anki || {}); setBonusAdiado(d?.bonusAdiado || {});
       setPronto(true);
     })();
     Atualizador.registrar();
@@ -778,10 +790,10 @@ function App() {
   }, [pronto]);
   useEffect(() => {
     if (!pronto) return;
-    const est = { blocos, bonus, cfg, registro, adiados, excluidos, anki };
+    const est = { blocos, bonus, cfg, registro, adiados, excluidos, anki, bonusAdiado };
     save(KEY, est);
     Sync.enviar(est);
-  }, [blocos, bonus, cfg, registro, adiados, excluidos, anki, pronto]);
+  }, [blocos, bonus, cfg, registro, adiados, excluidos, anki, bonusAdiado, pronto]);
 
   useEffect(() => {
     if (!pronto) return;
@@ -796,7 +808,8 @@ function App() {
   }, [pronto, segAtual, registro, adiados]);
 
   const fora = useMemo(() => new Set(excluidos[segAtual] || []), [excluidos, segAtual]);
-  const plano = useMemo(() => construir(blocos, bonus, cfg, hoje, adiados, fora), [blocos, bonus, cfg, hoje, adiados, fora]);
+  const plano = useMemo(() => construir(blocos, bonus, cfg, hoje, adiados, fora, bonusAdiado),
+    [blocos, bonus, cfg, hoje, adiados, fora, bonusAdiado]);
   const sem0 = plano.semanas[0];
 
   useEffect(() => {
@@ -854,6 +867,37 @@ function App() {
 
   const recuar = useCallback((id) => setBlocos((bs) => bs.map((b) => b.id === id ? voltarBloco(b, Math.max(0, b.etapa - 1)) : b)), []);
   const avancar = useCallback((id) => setBlocos((bs) => bs.map((b) => b.id === id && b.etapa < CONCLUIDO ? avancarBloco(b, b.etapa, hojeISO()) : b)), []);
+
+  // Troca das aulas bônus da semana: as escolhidas saem para o fim da fila e entram
+  // outras, do mesmo nível de estrelas enquanto houver.
+  const trocarBonus = useCallback((ids) => {
+    if (!ids.length) { marcarPerguntado(); return; }
+    const volta = addDays(segAtual, 7 * Math.max(1, cfg.semanasAdiamentoBonus));
+    setBonusAdiado((b) => { const n = { ...b }; ids.forEach((id) => { n[id] = volta; }); return n; });
+    setExcluidos((e) => ({ ...e, [segAtual]: [...new Set([...(e[segAtual] || []), ...ids])] }));
+    setRegistro((r) => {
+      const s = r[segAtual]; if (!s) return r;
+      return { ...r, [segAtual]: { ...s, bonusPerguntado: true,
+        planejados: s.planejados.filter((p) => !ids.includes(p.id)),
+        feitos: s.feitos.filter((x) => !ids.includes(x)) } };
+    });
+  }, [segAtual, cfg.semanasAdiamentoBonus]);
+
+  const marcarPerguntado = useCallback(() => setRegistro((r) => {
+    const s = r[segAtual]; if (!s || s.bonusPerguntado) return r;
+    return { ...r, [segAtual]: { ...s, bonusPerguntado: true } };
+  }), [segAtual]);
+
+  // depois de uma troca, as substitutas entram no checklist desta semana
+  useEffect(() => {
+    if (!pronto || !sem0) return;
+    const s = registro[segAtual]; if (!s) return;
+    const atuais = new Set(s.planejados.map((p) => p.id));
+    const novas = sem0.itens.filter((i) => !atuais.has(i.id))
+      .map((i) => ({ id: i.id, tipo: i.tipo, tema: i.tema, rotulo: i.rotulo, peso: i.peso, semana: i.semana }));
+    if (!novas.length) return;
+    setRegistro((r) => ({ ...r, [segAtual]: { ...r[segAtual], planejados: [...r[segAtual].planejados, ...novas] } }));
+  }, [pronto, sem0, registro, segAtual]);
 
   // leitura do Anki (só no aparelho em que ela foi ativada)
   const [ankiMsg, setAnkiMsg] = useState("");
@@ -920,7 +964,8 @@ function App() {
       )}
       <Cabecalho plano={plano} cfg={cfg} blocos={blocos} hoje={hoje} registro={registro} segAtual={segAtual} sync={sync} />
       <div style={{ padding: "0 14px 96px" }}>
-        {aba === "semana" && <Semana plano={plano} cfg={cfg} registro={registro} segAtual={segAtual} concluir={concluir} desfazer={desfazer} anki={anki} />}
+        {aba === "semana" && <Semana plano={plano} cfg={cfg} registro={registro} segAtual={segAtual} concluir={concluir}
+          desfazer={desfazer} anki={anki} trocarBonus={trocarBonus} manterBonus={marcarPerguntado} bonusAdiado={bonusAdiado} />}
         {aba === "plano" && <PlanoSemanal plano={plano} segAtual={segAtual} cfg={cfg} />}
         {aba === "bonus" && <Bonus bonus={bonus} cfg={cfg} setCfg={setCfg}
           toggle={(id) => setBonus((bs) => bs.map((x) => x.id === id ? { ...x, feito: !x.feito } : x))} />}
@@ -1025,7 +1070,57 @@ function Caixa({ valor, rot }) {
 }
 
 /* ---------- SEMANA: quatro checklists ---------- */
-function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki }) {
+function TrocaBonus({ itens, aberto, setAberto, trocar, manter, perguntado }) {
+  const [sel, setSel] = useState(() => new Set(itens.map((i) => i.id)));
+  useEffect(() => { setSel(new Set(itens.map((i) => i.id))); }, [itens.map((i) => i.id).join()]);
+  if (!itens.length) return null;
+  const alterna = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const btn = { flex: 1, padding: "9px 8px", fontSize: 12.5, cursor: "pointer", fontFamily: SANS,
+    border: `1px solid ${C.star}`, background: "transparent", color: C.star };
+
+  if (!aberto) {
+    return perguntado ? null : (
+      <div style={{ background: C.surface, borderLeft: `3px solid ${C.star}`, padding: "12px 13px", marginTop: 14 }}>
+        <div style={{ fontSize: 13.5, lineHeight: 1.45 }}>Semana nova. Quer trocar as aulas bônus sugeridas?</div>
+        <div style={{ fontSize: 12, color: C.ink2, marginTop: 6, lineHeight: 1.5 }}>
+          As trocadas voltam para o fim da fila e entram outras do mesmo nível de estrelas.
+        </div>
+        <div style={{ display: "flex", gap: 7, marginTop: 11 }}>
+          <button style={{ ...btn, background: C.star, color: C.base, border: "none" }} onClick={() => setAberto(true)}>Escolher</button>
+          <button style={{ ...btn, borderColor: C.line, color: C.ink2 }} onClick={manter}>Manter estas</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ background: C.surface, borderLeft: `3px solid ${C.star}`, padding: "12px 13px", marginTop: 14 }}>
+      <div style={{ fontSize: 13, marginBottom: 4 }}>Quais bônus trocar?</div>
+      <div style={{ fontSize: 12, color: C.ink2, marginBottom: 9, lineHeight: 1.5 }}>
+        Marcadas serão substituídas; as demais continuam na semana.
+      </div>
+      {itens.map((i) => (
+        <label key={i.id} style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "5px 0", cursor: "pointer" }}>
+          <input type="checkbox" checked={sel.has(i.id)} onChange={() => alterna(i.id)}
+            style={{ accentColor: C.star, width: 17, height: 17, marginTop: 2 }} />
+          <span style={{ fontSize: 13.5, lineHeight: 1.35 }}>
+            {i.tema}<span style={{ color: C.star }}> {"★".repeat(i.estrelas || 0)}</span>
+            <span style={{ color: C.ink2, fontSize: 11.5 }}> · semana {i.semana}</span>
+          </span>
+        </label>))}
+      <div style={{ display: "flex", gap: 7, marginTop: 10 }}>
+        <button style={{ ...btn, background: C.star, color: C.base, border: "none" }}
+          onClick={() => { trocar([...sel]); setAberto(false); }}>
+          Trocar {sel.size === itens.length ? "todas" : `(${sel.size})`}
+        </button>
+        <button style={{ ...btn, borderColor: C.line, color: C.ink2 }}
+          onClick={() => { manter(); setAberto(false); }}>Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
+function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki, trocarBonus, manterBonus, bonusAdiado }) {
+  const [trocaAberta, setTrocaAberta] = useState(false);
   const s = registro[segAtual] || { planejados: [], feitos: [] };
   const feitos = new Set(s.feitos);
   const itens = (plano.semanas[0]?.itens || []).filter((i) => !feitos.has(i.id));
@@ -1044,6 +1139,8 @@ function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki }) {
   return (
     <div>
       <Grafico registro={registro} segAtual={segAtual} plano={plano} />
+      <TrocaBonus itens={itens.filter((i) => i.tipo === "bonus")} aberto={trocaAberta} setAberto={setTrocaAberta}
+        trocar={trocarBonus} manter={manterBonus} perguntado={!!s.bonusPerguntado} />
       <SecaoTitulo texto={`Checklist da semana · ${feitoPts} de ${sem ? sem.pontos : 0} pontos${
         sem && sem.fator < 1 ? ` · carga reduzida ${Math.round((1 - sem.fator) * 100)}%` : ""}`} />
       {itens.length === 0 && <Vazio texto="Semana zerada. Os objetivos da próxima aparecem no sábado." />}
@@ -1052,6 +1149,9 @@ function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki }) {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", margin: "10px 0 7px" }}>
             <span style={{ fontSize: 11.5, color: cor, textTransform: "uppercase", letterSpacing: "0.04em" }}>{t}</span>
             <span style={{ fontSize: 11, color: C.ink2 }}>
+              {t === "Aulas bônus" && !trocaAberta && s.bonusPerguntado && (
+                <button onClick={() => setTrocaAberta(true)} style={{ border: "none", background: "none", color: C.star,
+                  fontSize: 11, marginRight: 10, cursor: "pointer", padding: 0, textDecoration: "underline" }}>trocar</button>)}
               {t === "Revisões · flashcards" && ehAndroid() && (
                 <a href={ABRIR_ANKIDROID} style={{ color: C.tealClaro, marginRight: 10, textDecoration: "none" }}>Abrir AnkiDroid</a>)}
               {l.length} · {l.reduce((a, i) => a + i.peso, 0)} pts
@@ -1647,7 +1747,16 @@ function Dados({ cfg, setCfg, blocos, setBlocos, bonus, setBonus, registro, setR
           onClick={() => { setAdiados({}); setMsg("Contador de adiamentos zerado."); }}>Zerar contador de adiamentos</button>
       </div>
 
-      <SecaoTitulo texto="Aulas bônus de baixa prioridade" />
+      <SecaoTitulo texto="Aulas bônus" />
+      <div style={{ background: C.surface, padding: 13, marginBottom: 12 }}>
+        <input type="range" min="1" max="12" step="1" value={cfg.semanasAdiamentoBonus} style={{ width: "100%", accentColor: C.star }}
+          onChange={(e) => setCfg({ ...cfg, semanasAdiamentoBonus: Number(e.target.value) })} />
+        <div style={{ fontSize: 13, marginTop: 6 }}>Bônus trocada volta à fila depois de {cfg.semanasAdiamentoBonus} semanas</div>
+        <div style={{ fontSize: 12, color: C.ink2, marginTop: 7, lineHeight: 1.5 }}>
+          No começo de cada semana o app pergunta se você quer trocar as bônus sugeridas. As trocadas saem da
+          semana e entram outras do mesmo nível de estrelas, enquanto houver.
+        </div>
+      </div>
       <div style={{ background: C.surface, padding: 13, marginBottom: 12 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13, cursor: "pointer" }}>
           <input type="checkbox" checked={cfg.incluirBaixaPrioridade}

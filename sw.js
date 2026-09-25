@@ -1,6 +1,6 @@
 /* Service worker — deixa o app abrir sem internet e controla as atualizações.
    Para publicar uma nova versão: altere VERSAO aqui e em version.json (e APP_VERSION no app). */
-const VERSAO = "1.2.0";
+const VERSAO = "1.3.0";
 const CACHE = "estudos-" + VERSAO;
 const FB = "https://www.gstatic.com/firebasejs/10.14.1/";
 const ESSENCIAIS = [

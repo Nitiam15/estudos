@@ -31,14 +31,34 @@ e **instalação nos aparelhos**.
 
 ## 2. Publicação no GitHub Pages (grátis)
 
-1. Crie uma conta em **github.com**, se ainda não tiver.
-2. **New repository** → nome `estudos` → **Public** → **Create repository**.
-3. Clique em **uploading an existing file** e arraste **todo o conteúdo desta pasta**
-   (inclusive as pastas `icons`, `vendor` e `fonte`). Clique em **Commit changes**.
-4. **Settings → Pages** → em *Branch*, escolha `main` e `/ (root)` → **Save**.
-   Em 1 a 2 minutos o endereço fica disponível: `https://SEU-USUARIO.github.io/estudos/`
-5. Volte ao Firebase: **Authentication → Configurações → Domínios autorizados → Adicionar domínio**
-   e informe `SEU-USUARIO.github.io`. Sem isso, o login com Google é recusado.
+1. Crie uma conta em **github.com** e confirme o e-mail.
+2. Descompacte o pacote do app numa pasta.
+3. No canto superior direito, menu **+** → **New repository**. Nome: `estudos`.
+   Visibilidade: **Public** — no plano gratuito o Pages só funciona em repositório público.
+   Marque **Add a README file** e clique em **Create repository**.
+4. **Add file → Upload files.** Abra a pasta descompactada, selecione **todos os itens de dentro dela**
+   (inclusive as pastas `icons`, `vendor` e `fonte`) e arraste para a área de upload.
+   Escreva uma mensagem (ex.: "app v1.2.0") e clique em **Commit changes**.
+5. **Settings** → barra lateral, em "Code and automation", **Pages** → em "Build and deployment":
+   Source **Deploy from a branch**, Branch **main**, pasta **/ (root)** → **Save**.
+6. Aguarde alguns minutos e abra `https://SEU-USUARIO.github.io/estudos/`.
+   A publicação pode levar até 10 minutos; a aba **Actions** mostra o andamento em
+   *pages build and deployment*.
+7. Volte ao Firebase: **Authentication → Configurações → Domínios autorizados → Adicionar domínio**
+   e informe apenas `SEU-USUARIO.github.io` (sem `https://` e sem `/estudos`).
+   Sem isso, o login com Google é recusado.
+
+**Suba o conteúdo da pasta, não a pasta.** Se você arrastar a pasta inteira, os arquivos ficam numa subpasta
+e o endereço muda, quebrando o app. Confira depois do envio: a lista de arquivos do repositório deve mostrar
+`index.html` logo na primeira tela.
+
+**Se aparecer aviso de segredo no envio.** O GitHub verifica segredos em repositórios públicos e reconhece
+chaves de API do Google, como a que está no `firebase-config.js`. No Firebase para web essa chave é pública por
+definição: ela identifica o projeto, e quem protege os dados são as regras do Firestore. Quando o aviso
+aparecer, use a opção de permitir o envio (*Allow secret*, com o motivo *It's used in tests* ou *False positive*).
+
+**Limites do envio pela web:** até 25 MiB por arquivo e 100 arquivos por vez. O pacote tem 19 arquivos,
+o maior com cerca de 570 KB.
 
 > Com o repositório público, qualquer pessoa com o endereço vê o código e a lista de temas do cronograma,
 > mas **não** o seu progresso, que fica protegido no Firebase.
@@ -93,6 +113,16 @@ Com o Anki aberto, o app lê as contagens ao abrir, a cada 5 minutos e ao tocar 
 - Na aba **Mapa**, os botões **+** e **−** de cada matéria avançam ou recuam uma etapa da escada.
 Revisões feitas no AnkiDroid entram na conta depois que o AnkiDroid e o Anki do computador sincronizarem com o AnkiWeb.
 No celular, deixe **Ler do Anki neste aparelho** desligado; nas revisões aparece o atalho **Abrir AnkiDroid**.
+
+## Troca das aulas bônus
+
+No primeiro acesso de cada semana, se houver aulas bônus na agenda, o app pergunta se você quer trocá-las.
+
+- **Manter estas** segue com as sugeridas.
+- **Escolher** abre a lista: marque as que quer trocar (vêm todas marcadas) e confirme.
+- As trocadas saem da semana e voltam ao fim da fila depois de algumas semanas (padrão: 4, ajustável em
+  **Dados → Aulas bônus**). No lugar delas entram outras do mesmo nível de estrelas, enquanto houver.
+- Depois de responder, o atalho **trocar**, no cabeçalho do grupo "Aulas bônus", reabre a escolha quando quiser.
 
 ## Atualizações
 
