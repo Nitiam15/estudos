@@ -1,7 +1,7 @@
 /* gerado a partir de app.jsx */
 "use strict";
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.4.0";
 /* ============================================================
    PLANEJAMENTO DE ESTUDOS — residência 2027
    Cronograma: MEDPlanner | MEDCURSO 2026 (Notion)
@@ -356,12 +356,29 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
     };
     const janela = Math.max(1, cfg.janelaRedistribuicao);
     const min0 = (it) => (fora.has(it.id) ? 1 : 0);
-    adiada.forEach((it, k) => por(it, Math.max(min0(it), k % janela, it.tipo === "aula" ? alvoDaAula(it) : 0), true));
-    fAulas.forEach((a) => {
-        const i = por(a, Math.max(min0(a), alvoDaAula(a)), false);
-        if (a.par)
-            por(a.par, Math.max(i, min0(a.par)), false);
-    });
+    // A aula de uma semana do extensivo nunca sai da sua semana: entra primeiro e acima do
+    // limite de pontos. Pendências e revisões é que escorrem para as semanas seguintes.
+    const fixar = (it, i) => {
+        const b = bucket(i);
+        const { par, ...limpo } = it;
+        b.itens.push({ ...limpo, seg: b.seg });
+        b.pontos += it.peso;
+        return i;
+    };
+    const naPropriaSemana = (a) => idxSemana(a.semana) - baseIdx >= 0;
+    const pares = [];
+    // 1º) as aulas de cada semana ocupam o seu lugar e reservam os pontos delas
+    [...fAulas, ...adiada.filter((it) => it.tipo === "aula")].filter(naPropriaSemana)
+        .forEach((a) => { fixar(a, Math.max(min0(a), alvoDaAula(a))); if (a.par)
+        pares.push(a.par); });
+    // 2º) aulas atrasadas de semanas anteriores, que disputam espaço como as demais pendências
+    [...adiada.filter((it) => it.tipo === "aula" && !naPropriaSemana(it)), ...fAulas.filter((a) => !naPropriaSemana(a))]
+        .forEach((a) => { por(a, min0(a), !!a.adiado); if (a.par)
+        pares.push(a.par); });
+    // 3º) o restante se acomoda no que sobrou da capacidade
+    pares.forEach((q) => por(q, min0(q), false));
+    adiada.filter((it) => it.tipo !== "aula")
+        .forEach((it, k) => por(it, Math.max(min0(it), k % janela), true));
     fQuest.forEach((q) => por(q, Math.max(min0(q), q.venc <= hoje ? 0 : semanaDe(q.venc)), false));
     fRev.forEach((r) => por(r, Math.max(min0(r), r.venc <= hoje ? 0 : semanaDe(r.venc)), false));
     fBonus.forEach((b) => {
@@ -1248,6 +1265,13 @@ function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki, troc
     return (React.createElement("div", null,
         React.createElement(Grafico, { registro: registro, segAtual: segAtual, plano: plano }),
         React.createElement(TrocaBonus, { itens: itens.filter((i) => i.tipo === "bonus"), aberto: trocaAberta, setAberto: setTrocaAberta, trocar: trocarBonus, manter: manterBonus, perguntado: !!s.bonusPerguntado }),
+        sem && sem.pontos > sem.cap && (React.createElement("div", { style: { background: C.amberSoft, borderLeft: `3px solid ${C.amber}`, padding: "10px 12px",
+                marginTop: 14, fontSize: 12.5, lineHeight: 1.5 } },
+            "As aulas desta semana ocupam ",
+            sem.pontos,
+            " pontos, acima da capacidade de ",
+            sem.cap,
+            ". Elas t\u00EAm prioridade e ficam na semana; o resto foi adiado. Se isso se repetir, aumente a capacidade em Dados.")),
         React.createElement(SecaoTitulo, { texto: `Checklist da semana · ${feitoPts} de ${sem ? sem.pontos : 0} pontos${sem && sem.fator < 1 ? ` · carga reduzida ${Math.round((1 - sem.fator) * 100)}%` : ""}` }),
         itens.length === 0 && React.createElement(Vazio, { texto: "Semana zerada. Os objetivos da pr\u00F3xima aparecem no s\u00E1bado." }),
         grupos.map(([t, l, cor]) => l.length > 0 && (React.createElement("div", { key: t, style: { marginBottom: 14 } },
@@ -1372,8 +1396,8 @@ function Grafico({ registro, segAtual, plano }) {
     return (React.createElement("div", { style: { background: C.surface, padding: "13px 13px 11px", marginTop: 14 } },
         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 11 } },
             React.createElement("span", { style: { fontSize: 13, fontWeight: 600 } }, "Pontos por semana"),
-            React.createElement("span", { style: { fontSize: 11.5, color: C.ink2 } }, "at\u00E9 o fim do ano")),
-        React.createElement("svg", { width: "100%", viewBox: `0 0 ${W} ${H + 22}`, style: { display: "block" } }, dados.map((d, i) => {
+            React.createElement("span", { style: { fontSize: 11.5, color: C.ink2 } }, "in\u00EDcio de cada semana")),
+        React.createElement("svg", { width: "100%", viewBox: `-14 0 ${W + 14} ${H + 34}`, style: { display: "block" } }, dados.map((d, i) => {
             const x = i * (L + G), hT = (d.total / max) * H, hF = (d.feitos / max) * H;
             return (React.createElement("g", { key: d.k },
                 d.previsto
@@ -1381,7 +1405,7 @@ function Grafico({ registro, segAtual, plano }) {
                     : React.createElement("rect", { x: x, y: H - hT, width: L, height: hT, fill: d.fechada ? C.falta : C.pend }),
                 hF > 0 && React.createElement("rect", { x: x, y: H - hF, width: L, height: hF, fill: d.atual ? C.teal : C.tealClaro }),
                 d.atual && React.createElement("rect", { x: x, y: H + 3, width: L, height: 2, fill: C.teal }),
-                i % 2 === 0 && React.createElement("text", { x: i === 0 ? x : x + L / 2, y: H + 17, textAnchor: i === 0 ? "start" : "middle", fontSize: "7.5", fill: d.atual ? C.teal : C.ink2, fontFamily: SANS }, fmtCurto(d.k).slice(0, 5))));
+                React.createElement("text", { x: x + L / 2, y: H + 12, textAnchor: "end", fontSize: "8", fontFamily: SANS, fill: d.atual ? C.teal : C.ink2, fontWeight: d.atual ? 600 : 400, transform: `rotate(-60 ${x + L / 2} ${H + 12})` }, fmtCurto(d.k))));
         })),
         React.createElement("div", { style: { display: "flex", gap: 14, marginTop: 9, fontSize: 11, color: C.ink2, flexWrap: "wrap" } },
             React.createElement(Leg, { cor: C.tealClaro, t: `${totFeitos} cumpridos` }),

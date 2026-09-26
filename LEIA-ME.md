@@ -114,6 +114,13 @@ Com o Anki aberto, o app lê as contagens ao abrir, a cada 5 minutos e ao tocar 
 Revisões feitas no AnkiDroid entram na conta depois que o AnkiDroid e o Anki do computador sincronizarem com o AnkiWeb.
 No celular, deixe **Ler do Anki neste aparelho** desligado; nas revisões aparece o atalho **Abrir AnkiDroid**.
 
+## Prioridade das aulas da semana
+
+As aulas programadas para a semana do extensivo entram sempre na sua própria semana e reservam os pontos delas
+antes de tudo. Questões, revisões, bônus e pendências ocupam apenas o que sobra da capacidade e escorrem para as
+semanas seguintes quando não cabem. Se as duas aulas da semana sozinhas passarem da capacidade configurada, o app
+avisa no topo do checklist e sugere aumentar a capacidade em **Dados → Capacidade semanal**.
+
 ## Troca das aulas bônus
 
 No primeiro acesso de cada semana, se houver aulas bônus na agenda, o app pergunta se você quer trocá-las.
