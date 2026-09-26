@@ -114,10 +114,17 @@ Com o Anki aberto, o app lê as contagens ao abrir, a cada 5 minutos e ao tocar 
 Revisões feitas no AnkiDroid entram na conta depois que o AnkiDroid e o Anki do computador sincronizarem com o AnkiWeb.
 No celular, deixe **Ler do Anki neste aparelho** desligado; nas revisões aparece o atalho **Abrir AnkiDroid**.
 
+## Semana do extensivo
+
+O app avança sozinho a semana do Medcurso a cada sábado, junto com a virada da semana de estudo.
+Em **Dados → Semana atual e prova** dá para corrigir à mão, por exemplo se o extensivo pausar ou se você quiser
+pular semanas; a partir daí a contagem automática segue do valor que você deixou.
+
 ## Prioridade das aulas da semana
 
 As aulas programadas para a semana do extensivo entram sempre na sua própria semana e reservam os pontos delas
-antes de tudo. Questões, revisões, bônus e pendências ocupam apenas o que sobra da capacidade e escorrem para as
+antes de tudo. Depois entram as revisões e as questões já vencidas, e só então as questões das aulas novas, que
+nunca aparecem antes da semana da própria aula. Questões, revisões, bônus e pendências ocupam apenas o que sobra da capacidade e escorrem para as
 semanas seguintes quando não cabem. Se as duas aulas da semana sozinhas passarem da capacidade configurada, o app
 avisa no topo do checklist e sugere aumentar a capacidade em **Dados → Capacidade semanal**.
 

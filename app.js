@@ -1,7 +1,7 @@
 /* gerado a partir de app.jsx */
 "use strict";
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.5.0";
 /* ============================================================
    PLANEJAMENTO DE ESTUDOS — residência 2027
    Cronograma: MEDPlanner | MEDCURSO 2026 (Notion)
@@ -184,7 +184,7 @@ const DEFAULT_CFG = {
     fimPrimario: "2026-12-06", // fim do planejamento em carga cheia
     fimReduzido: "2027-01-10", // até aqui, carga reduzida
     reducao: 0.33,
-    semanaAtual: 38,
+    semanaAtual: 38, semanaBaseSeg: "2026-09-19", // semana do extensivo e o sábado em que ela começou
     pendentesForcados: [], // nenhuma aula anterior em aberto
     // aula assistida, questões e revisões pendentes ("semana" ou "semana|área")
     somenteAulas: ["33|PEDIATRIA", "34|PEDIATRIA", "35", "36", "37"],
@@ -239,6 +239,12 @@ function seed(cfg, hoje) {
         return { id: "b" + i, semana, area, tema, tier, etapa, dataAula };
     });
 }
+// semanas do extensivo, em ordem (a base do MEDPlanner não tem a 07)
+const ORDEM_SEMANAS = [...new Set(CRONO.map((c) => Number(c[0])))].sort((a, b) => a - b);
+const semanaDepoisDe = (n, passos) => {
+    const i = ORDEM_SEMANAS.indexOf(Number(n));
+    return ORDEM_SEMANAS[Math.min(ORDEM_SEMANAS.length - 1, Math.max(0, (i < 0 ? 0 : i) + passos))];
+};
 const seedBonus = () => {
     const out = [];
     Object.entries(BONUS).forEach(([semana, l]) => l.forEach(([nome, usp, uni, est], j) => out.push({ id: "x" + semana + "_" + j, semana, nome, usp, uni, extra: !!est, feito: false })));
@@ -314,8 +320,7 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
     const fRev = rest.filter((i) => i.tipo === "revisao").sort((a, b) => a.venc.localeCompare(b.venc));
     const fBonus = rest.filter((i) => i.tipo === "bonus");
     // cada aula pertence à sua semana do extensivo; as pendentes de semanas anteriores caem na semana 0
-    const ordemSemanas = [...new Set(CRONO.map((c) => Number(c[0])))].sort((x, y) => x - y);
-    const idxSemana = (n) => { const i = ordemSemanas.indexOf(Number(n)); return i < 0 ? 0 : i; };
+    const idxSemana = (n) => { const i = ORDEM_SEMANAS.indexOf(Number(n)); return i < 0 ? 0 : i; };
     const baseIdx = idxSemana(cfg.semanaAtual);
     const alvoDaAula = (b) => Math.max(0, idxSemana(b.semana) - baseIdx);
     const semanas = [];
@@ -366,21 +371,22 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
         return i;
     };
     const naPropriaSemana = (a) => idxSemana(a.semana) - baseIdx >= 0;
-    const pares = [];
+    const pares = []; // [questões, semana mínima] — nunca antes da semana da própria aula
     // 1º) as aulas de cada semana ocupam o seu lugar e reservam os pontos delas
     [...fAulas, ...adiada.filter((it) => it.tipo === "aula")].filter(naPropriaSemana)
-        .forEach((a) => { fixar(a, Math.max(min0(a), alvoDaAula(a))); if (a.par)
-        pares.push(a.par); });
+        .forEach((a) => { const i = fixar(a, Math.max(min0(a), alvoDaAula(a))); if (a.par)
+        pares.push([a.par, i]); });
     // 2º) aulas atrasadas de semanas anteriores, que disputam espaço como as demais pendências
     [...adiada.filter((it) => it.tipo === "aula" && !naPropriaSemana(it)), ...fAulas.filter((a) => !naPropriaSemana(a))]
-        .forEach((a) => { por(a, min0(a), !!a.adiado); if (a.par)
-        pares.push(a.par); });
-    // 3º) o restante se acomoda no que sobrou da capacidade
-    pares.forEach((q) => por(q, min0(q), false));
+        .forEach((a) => { const i = por(a, min0(a), !!a.adiado); if (a.par)
+        pares.push([a.par, i]); });
+    // 3º) revisões e questões já vencidas vêm antes do que ainda nem foi visto
+    fRev.forEach((r) => por(r, Math.max(min0(r), r.venc <= hoje ? 0 : semanaDe(r.venc)), false));
+    fQuest.forEach((q) => por(q, Math.max(min0(q), q.venc <= hoje ? 0 : semanaDe(q.venc)), false));
     adiada.filter((it) => it.tipo !== "aula")
         .forEach((it, k) => por(it, Math.max(min0(it), k % janela), true));
-    fQuest.forEach((q) => por(q, Math.max(min0(q), q.venc <= hoje ? 0 : semanaDe(q.venc)), false));
-    fRev.forEach((r) => por(r, Math.max(min0(r), r.venc <= hoje ? 0 : semanaDe(r.venc)), false));
+    // 4º) as questões das aulas novas, a partir da semana em que a aula acontece
+    pares.forEach(([q, iAula]) => por(q, Math.max(min0(q), iAula), false));
     fBonus.forEach((b) => {
         const ate = bonusAdiado[b.id]; // trocada: só volta a partir dessa semana
         const iAdiado = ate ? Math.max(0, Math.ceil(diffDays(seg0, ate) / 7)) : 0;
@@ -1015,6 +1021,16 @@ function App() {
     }, [segAtual]);
     const recuar = useCallback((id) => setBlocos((bs) => bs.map((b) => b.id === id ? voltarBloco(b, Math.max(0, b.etapa - 1)) : b)), []);
     const avancar = useCallback((id) => setBlocos((bs) => bs.map((b) => b.id === id && b.etapa < CONCLUIDO ? avancarBloco(b, b.etapa, hojeISO()) : b)), []);
+    // A semana do extensivo avança junto com o calendário, sem precisar editar nada.
+    useEffect(() => {
+        if (!pronto || !cfg.semanaBaseSeg)
+            return;
+        const passos = Math.floor(diffDays(cfg.semanaBaseSeg, segAtual) / 7);
+        if (passos <= 0)
+            return;
+        const nova = semanaDepoisDe(cfg.semanaAtual, passos);
+        setCfg((c) => ({ ...c, semanaAtual: nova, semanaBaseSeg: segAtual }));
+    }, [pronto, segAtual, cfg.semanaAtual, cfg.semanaBaseSeg]);
     // Troca das aulas bônus da semana: as escolhidas saem para o fim da fila e entram
     // outras, do mesmo nível de estrelas enquanto houver.
     const trocarBonus = useCallback((ids) => {
@@ -1405,7 +1421,7 @@ function Grafico({ registro, segAtual, plano }) {
                     : React.createElement("rect", { x: x, y: H - hT, width: L, height: hT, fill: d.fechada ? C.falta : C.pend }),
                 hF > 0 && React.createElement("rect", { x: x, y: H - hF, width: L, height: hF, fill: d.atual ? C.teal : C.tealClaro }),
                 d.atual && React.createElement("rect", { x: x, y: H + 3, width: L, height: 2, fill: C.teal }),
-                React.createElement("text", { x: x + L / 2, y: H + 12, textAnchor: "end", fontSize: "8", fontFamily: SANS, fill: d.atual ? C.teal : C.ink2, fontWeight: d.atual ? 600 : 400, transform: `rotate(-60 ${x + L / 2} ${H + 12})` }, fmtCurto(d.k))));
+                React.createElement("text", { x: x + L / 2, y: H + 12, textAnchor: "end", fontSize: "7", fontFamily: SANS, fill: d.atual ? C.teal : C.ink2, fontWeight: d.atual ? 600 : 400, transform: `rotate(-60 ${x + L / 2} ${H + 12})` }, fmtCurto(d.k))));
         })),
         React.createElement("div", { style: { display: "flex", gap: 14, marginTop: 9, fontSize: 11, color: C.ink2, flexWrap: "wrap" } },
             React.createElement(Leg, { cor: C.tealClaro, t: `${totFeitos} cumpridos` }),
@@ -1852,7 +1868,8 @@ function Dados({ cfg, setCfg, blocos, setBlocos, bonus, setBonus, registro, setR
             msg && React.createElement("div", { style: { fontSize: 12.5, color: C.teal, marginTop: 9 } }, msg)),
         React.createElement(SecaoTitulo, { texto: "Semana atual e prova" }),
         React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
-            React.createElement("input", { style: inp, type: "number", min: "1", max: "46", value: cfg.semanaAtual, onChange: (e) => setCfg({ ...cfg, semanaAtual: Number(e.target.value) || 1 }) }),
+            React.createElement("input", { style: inp, type: "number", min: "1", max: "46", value: cfg.semanaAtual, onChange: (e) => setCfg({ ...cfg, semanaAtual: Number(e.target.value) || 1, semanaBaseSeg: sabado(hoje) }) }),
+            React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 7, lineHeight: 1.5 } }, "A semana avan\u00E7a sozinha todo s\u00E1bado. Ajuste aqui s\u00F3 se o extensivo pausar ou se voc\u00EA quiser pular."),
             React.createElement("button", { style: { ...btnSec, marginTop: 9, width: "100%" }, onClick: () => { setBlocos(seed(cfg, hoje)); setMsg("Estado recalculado."); } }, "Recalcular estado das semanas"),
             React.createElement("input", { style: { ...inp, marginTop: 13 }, value: cfg.nomeProva, onChange: (e) => setCfg({ ...cfg, nomeProva: e.target.value }) }),
             React.createElement("input", { style: { ...inp, marginTop: 8 }, type: "date", value: cfg.dataProva, onChange: (e) => setCfg({ ...cfg, dataProva: e.target.value, provisorio: false }) }),

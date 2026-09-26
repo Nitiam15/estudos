@@ -1,1 +1,1 @@
-{ "versao": "1.4.0", "notas": "As aulas da semana nunca são deslocadas por pendências; o gráfico mostra a data de início de cada semana." }
+{ "versao": "1.5.0", "notas": "A semana do extensivo avança sozinha; questoes ficam presas a semana da propria aula; revisoes vencidas voltam a ter prioridade." }
