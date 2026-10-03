@@ -1,7 +1,7 @@
 /* gerado a partir de app.jsx */
 "use strict";
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.6.1";
 /* ============================================================
    PLANEJAMENTO DE ESTUDOS — residência 2027
    Cronograma: MEDPlanner | MEDCURSO 2026 (Notion)
@@ -40,7 +40,6 @@ const sabado = (s) => { const d = parse(s); return addDays(s, -((d.getDay() + 1)
 const rotuloSemana = (s) => `${fmt(s)} a ${fmt(addDays(s, 6))}`;
 /* ---------- pesos ---------- */
 const PESO = { aula: 5, bonus: 3, questoes: 2, revisao: 1 };
-const NOME_TIPO = { aula: "Aula", bonus: "Aula bônus", questoes: "Questões pós-aula", revisao: "Revisão · flashcards" };
 /* ---------- escada nativa do Medcurso ---------- */
 const ESCADA = [
     { nome: "Aula", dias: 0, tipo: "aula" },
@@ -241,9 +240,11 @@ function seed(cfg, hoje) {
 }
 // semanas do extensivo, em ordem (a base do MEDPlanner não tem a 07)
 const ORDEM_SEMANAS = [...new Set(CRONO.map((c) => Number(c[0])))].sort((a, b) => a - b);
+// posição na lista; uma semana ausente (a 07) conta como a próxima que existe
+const indiceSemana = (n) => { const i = ORDEM_SEMANAS.findIndex((x) => x >= Number(n)); return i < 0 ? ORDEM_SEMANAS.length - 1 : i; };
 const semanaDepoisDe = (n, passos) => {
-    const i = ORDEM_SEMANAS.indexOf(Number(n));
-    return ORDEM_SEMANAS[Math.min(ORDEM_SEMANAS.length - 1, Math.max(0, (i < 0 ? 0 : i) + passos))];
+    const i = indiceSemana(n), j = i + passos - (ORDEM_SEMANAS[i] === Number(n) || passos <= 0 ? 0 : 1);
+    return ORDEM_SEMANAS[Math.min(ORDEM_SEMANAS.length - 1, Math.max(0, j))];
 };
 const seedBonus = () => {
     const out = [];
@@ -279,7 +280,15 @@ function fatorCarga(seg, cfg) {
         return 1 - cfg.reducao;
     return 1;
 }
-function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdiado = {}) {
+// vencimento de uma etapa: os marcos da escada contam a partir da aula ("Revisão 4 meses" = 4 meses depois da
+// aula); se a etapa anterior foi feita com atraso, a seguinte espera um intervalo mínimo depois dela
+function vencimento(b, e, hoje) {
+    const aula = b.dataAula || b.dataUltima || hoje, ult = b.dataUltima || aula;
+    const marco = addDays(aula, ESCADA[e].dias), minimo = addDays(ult, e >= 3 ? 7 : 1);
+    return e <= 1 ? marco : (marco > minimo ? marco : minimo);
+}
+// jaFeito: pontos e quantidades já cumpridos na semana atual, que continuam ocupando a capacidade dela
+function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdiado = {}, jaFeito = null) {
     const seg0 = sabado(hoje);
     const nAdi = (id) => adiados[id] || 0;
     const aulas = [], questoes = [], revisoes = [];
@@ -292,11 +301,11 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
             // a aula e as suas questões entram juntas na mesma semana
             aulas.push(mk(b, 0, { tipo: "aula", peso: PESO.aula, ordem: Number(b.semana), questoes: 0,
                 atrasada: Number(b.semana) < cfg.semanaAtual,
-                par: mk(b, 1, { tipo: "questoes", peso: PESO.questoes }) }));
+                par: mk(b, 1, { tipo: "questoes", peso: PESO.questoes, adiado: nAdi(b.id + ":1") }) }));
         }
         else {
             const p = ESCADA[b.etapa];
-            const venc = addDays(b.dataUltima || b.dataAula || hoje, p.dias);
+            const venc = vencimento(b, b.etapa, hoje);
             const it = mk(b, b.etapa, { venc, atraso: Math.max(0, diffDays(venc, hoje)) });
             if (p.tipo === "questoes")
                 questoes.push({ ...it, tipo: "questoes", peso: PESO.questoes });
@@ -320,7 +329,7 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
     const fRev = rest.filter((i) => i.tipo === "revisao").sort((a, b) => a.venc.localeCompare(b.venc));
     const fBonus = rest.filter((i) => i.tipo === "bonus");
     // cada aula pertence à sua semana do extensivo; as pendentes de semanas anteriores caem na semana 0
-    const idxSemana = (n) => { const i = ORDEM_SEMANAS.indexOf(Number(n)); return i < 0 ? 0 : i; };
+    const idxSemana = indiceSemana;
     const baseIdx = idxSemana(cfg.semanaAtual);
     const alvoDaAula = (b) => Math.max(0, idxSemana(b.semana) - baseIdx);
     const semanas = [];
@@ -334,19 +343,15 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
         }
         return semanas[i];
     };
-    bucket(0);
+    const s0 = bucket(0);
+    if (jaFeito) {
+        s0.pontos = jaFeito.pontos;
+        s0.nRev = jaFeito.nRev;
+        s0.nBns = jaFeito.nBns;
+        s0.feito = jaFeito.pontos;
+    }
     const semanaDe = (data) => Math.max(0, Math.floor(diffDays(seg0, sabado(data)) / 7));
-    const por = (it, iMin, adi) => {
-        let i = iMin, g = 0;
-        while (g++ < 800) {
-            const b = bucket(i);
-            const cabePontos = b.pontos + it.peso <= b.cap + 0.01;
-            const cabeAdi = !adi || b.pAdi + it.peso <= b.cap * cfg.tetoAdiado + 0.01;
-            const cabeTipo = (it.tipo !== "revisao" || b.nRev < b.maxRev) && (it.tipo !== "bonus" || b.nBns < b.maxBns);
-            if (cabePontos && cabeAdi && cabeTipo)
-                break;
-            i++;
-        }
+    const colocar = (it, i, adi) => {
         const b = bucket(i);
         const { par, ...limpo } = it;
         b.itens.push({ ...limpo, seg: b.seg });
@@ -359,17 +364,27 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
             b.nBns++;
         return i;
     };
-    const janela = Math.max(1, cfg.janelaRedistribuicao);
-    const min0 = (it) => (fora.has(it.id) ? 1 : 0);
-    // A aula de uma semana do extensivo nunca sai da sua semana: entra primeiro e acima do
-    // limite de pontos. Pendências e revisões é que escorrem para as semanas seguintes.
-    const fixar = (it, i) => {
-        const b = bucket(i);
-        const { par, ...limpo } = it;
-        b.itens.push({ ...limpo, seg: b.seg });
-        b.pontos += it.peso;
-        return i;
+    const cabe = (b, it, adi) => ((b.pontos === 0 && !b.itens.length) || b.pontos + it.peso <= b.cap + 0.01)
+        // metas adiadas: até o teto da semana, mas sempre ao menos uma (uma aula de 5 pts nunca fica sem lugar)
+        && (!adi || b.pAdi === 0 || b.pAdi + it.peso <= b.cap * cfg.tetoAdiado + 0.01)
+        && (it.tipo !== "revisao" || b.nRev < b.maxRev) && (it.tipo !== "bonus" || b.nBns < b.maxBns);
+    const por = (it, iMin, adi) => {
+        let i = iMin;
+        while (!cabe(bucket(i), it, adi) && i < iMin + 400)
+            i++;
+        return colocar(it, i, adi);
     };
+    const janela = Math.max(1, cfg.janelaRedistribuicao);
+    // questões pós-aula nunca aparecem antes da semana da própria aula, mesmo que ela tenha sido vista antes
+    // bônus trocada só volta a partir da data escolhida, inclusive quando também estava entre as adiadas
+    const voltaBonus = (it) => {
+        const ate = it.tipo === "bonus" && bonusAdiado[it.id];
+        return ate ? Math.max(0, Math.ceil(diffDays(seg0, ate) / 7)) : 0;
+    };
+    const min0 = (it) => Math.max(fora.has(it.id) ? 1 : 0, voltaBonus(it), it.tipo === "questoes" && it.etapaItem === 1 ? alvoDaAula(it) : 0);
+    // A aula de uma semana do extensivo nunca sai da sua semana: entra primeiro e reserva os pontos dela.
+    // Pendências e revisões é que escorrem para as semanas seguintes.
+    const fixar = (it, i) => colocar(it, i, false);
     const naPropriaSemana = (a) => idxSemana(a.semana) - baseIdx >= 0;
     const pares = []; // [questões, semana mínima] — nunca antes da semana da própria aula
     // 1º) as aulas de cada semana ocupam o seu lugar e reservam os pontos delas
@@ -386,12 +401,8 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
     adiada.filter((it) => it.tipo !== "aula")
         .forEach((it, k) => por(it, Math.max(min0(it), k % janela), true));
     // 4º) as questões das aulas novas, a partir da semana em que a aula acontece
-    pares.forEach(([q, iAula]) => por(q, Math.max(min0(q), iAula), false));
-    fBonus.forEach((b) => {
-        const ate = bonusAdiado[b.id]; // trocada: só volta a partir dessa semana
-        const iAdiado = ate ? Math.max(0, Math.ceil(diffDays(seg0, ate) / 7)) : 0;
-        por(b, Math.max(min0(b), iAdiado), false);
-    });
+    pares.forEach(([q, iAula]) => por(q, Math.max(min0(q), iAula), q.adiado > 0));
+    fBonus.forEach((b) => por(b, min0(b), false));
     const ordem = { aula: 0, questoes: 1, revisao: 2, bonus: 3 };
     semanas.forEach((s) => s.itens.sort((a, b) => b.adiado - a.adiado || ordem[a.tipo] - ordem[b.tipo]
         || Number(a.semana) - Number(b.semana)));
@@ -399,7 +410,7 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
     semanas.forEach((s) => { if (s.itens.some((x) => x.tipo === "aula"))
         terminoAulas = addDays(s.seg, 6); });
     return { semanas, aulas: fAulas.concat(adiada.filter((a) => a.tipo === "aula")), terminoAulas,
-        atrasadas: [...fQuest, ...fRev].filter((r) => r.atraso > 0).length,
+        atrasadas: todos.filter((r) => (r.tipo === "questoes" || r.tipo === "revisao") && (r.atraso > 0 || r.adiado > 0)).length,
         totalAdiadas: adiada.length };
 }
 /* ============================================================
@@ -432,35 +443,37 @@ function daNuvem(d) {
     const registro = {};
     Object.entries(d.registro || {}).forEach(([k, r]) => {
         registro[k] = { planejados: r.planejados || [], feitos: r.feitos || [], fechada: !!r.fechada, auto: r.auto || {}, manual: r.manual || {} };
+        BANDEIRAS.forEach((f) => { if (r[f] !== undefined)
+            registro[k][f] = r[f]; });
     });
     return { cfg, blocos, bonus, registro, adiados: d.adiados || {}, excluidos: d.excluidos || {},
         anki: d.anki || {}, bonusAdiado: d.bonusAdiado || {} };
 }
-const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// comparação independente da ordem das chaves (a nuvem devolve os campos em outra ordem)
+const estavel = (v) => v && typeof v === "object"
+    ? (Array.isArray(v) ? "[" + v.map(estavel).join(",") + "]"
+        : "{" + Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => JSON.stringify(k) + ":" + estavel(v[k])).join(",") + "}")
+    : JSON.stringify(v === undefined ? null : v);
+const igual = (a, b) => estavel(a) === estavel(b);
+const BANDEIRAS = ["bonusPerguntado", "revisar"]; // marcas simples de cada semana do registro
 // diferença entre dois estados em formato de nuvem -> patch para setDoc(merge)
+// devolve um patch, ou uma lista de patches quando um campo precisa de duas gravações (remover e acrescentar)
 function diferenca(ant, nov, F) {
-    const p = {};
+    const p = {}, depois = [];
     let n = 0;
     const put = (k, sub, v) => { (p[k] || (p[k] = {}))[sub] = v; n++; };
-    Object.keys({ ...ant.cfg, ...nov.cfg }).forEach((k) => {
-        if (!igual(ant.cfg[k], nov.cfg[k]))
-            put("cfg", k, nov.cfg[k] === undefined ? F.deleteField() : nov.cfg[k]);
-    });
-    Object.keys(nov.blocos).forEach((id) => { if (!igual(ant.blocos[id], nov.blocos[id]))
-        put("blocos", id, nov.blocos[id]); });
-    Object.keys(nov.bonus).forEach((id) => { if (ant.bonus[id] !== nov.bonus[id])
-        put("bonus", id, nov.bonus[id]); });
-    Object.keys({ ...ant.adiados, ...nov.adiados }).forEach((id) => {
-        if (ant.adiados[id] !== nov.adiados[id])
-            put("adiados", id, nov.adiados[id] === undefined ? F.deleteField() : nov.adiados[id]);
-    });
-    Object.keys(nov.anki || {}).forEach((id) => { if (!igual((ant.anki || {})[id], nov.anki[id]))
-        put("anki", id, nov.anki[id]); });
-    Object.keys({ ...(ant.bonusAdiado || {}), ...(nov.bonusAdiado || {}) }).forEach((id) => {
-        const va = (ant.bonusAdiado || {})[id], vb = (nov.bonusAdiado || {})[id];
-        if (va !== vb)
-            put("bonusAdiado", id, vb === undefined ? F.deleteField() : vb);
-    });
+    // mapas id → valor: grava campo a campo; "apagaveis" também remove as chaves que sumiram
+    const difMapa = (nome, apagavel) => {
+        const va = ant[nome] || {}, vb = nov[nome] || {};
+        const chaves = apagavel ? Object.keys({ ...va, ...vb }) : Object.keys(vb);
+        chaves.forEach((id) => {
+            if (igual(va[id], vb[id]))
+                return;
+            put(nome, id, vb[id] === undefined ? F.deleteField() : vb[id]);
+        });
+    };
+    ["cfg", "adiados", "bonusAdiado"].forEach((m) => difMapa(m, true));
+    ["blocos", "bonus", "anki"].forEach((m) => difMapa(m, false));
     Object.keys(nov.excluidos).forEach((k) => {
         const a = ant.excluidos[k] || [], b = nov.excluidos[k] || [];
         const add = b.filter((x) => !a.includes(x));
@@ -469,15 +482,15 @@ function diferenca(ant, nov, F) {
     });
     Object.keys(nov.registro).forEach((k) => {
         const a = ant.registro[k], b = nov.registro[k], r = {};
-        const mapas = (x, y) => {
-            ["auto", "manual"].forEach((m) => {
-                const va = (x && x[m]) || {}, vb = y[m] || {}, sub = {};
-                Object.keys({ ...va, ...vb }).forEach((id) => { if (va[id] !== vb[id])
-                    sub[id] = vb[id] === undefined ? F.deleteField() : vb[id]; });
-                if (Object.keys(sub).length)
-                    r[m] = sub;
-            });
-        };
+        const mapas = (x, y) => ["auto", "manual"].forEach((m) => {
+            const va = (x && x[m]) || {}, vb = y[m] || {}, sub = {};
+            Object.keys({ ...va, ...vb }).forEach((id) => { if (!igual(va[id], vb[id]))
+                sub[id] = vb[id] === undefined ? F.deleteField() : vb[id]; });
+            if (Object.keys(sub).length)
+                r[m] = sub;
+        });
+        BANDEIRAS.forEach((f) => { if (b[f] !== undefined && (!a || a[f] !== b[f]))
+            r[f] = b[f]; });
         if (!a) {
             r.planejados = b.planejados;
             r.fechada = b.fechada;
@@ -493,23 +506,41 @@ function diferenca(ant, nov, F) {
                 r.fechada = b.fechada;
             const add = b.feitos.filter((x) => !a.feitos.includes(x));
             const rem = a.feitos.filter((x) => !b.feitos.includes(x));
-            if (add.length && rem.length)
-                r.feitos = b.feitos;
-            else if (add.length)
-                r.feitos = F.arrayUnion(...add);
-            else if (rem.length)
+            if (rem.length)
                 r.feitos = F.arrayRemove(...rem);
+            if (add.length) {
+                if (rem.length)
+                    depois.push([k, F.arrayUnion(...add)]);
+                else
+                    r.feitos = F.arrayUnion(...add);
+            }
         }
         if (Object.keys(r).length)
             put("registro", k, r);
     });
-    return n ? p : null;
+    if (!n)
+        return null;
+    return depois.length ? [p, ...depois.map(([k, v]) => ({ registro: { [k]: { feitos: v } } }))] : p;
 }
 const VAZIO_NUVEM = { cfg: {}, blocos: {}, bonus: {}, registro: {}, adiados: {}, excluidos: {}, anki: {}, bonusAdiado: {} };
 const Sync = {
     status: "local", user: null, erro: "", pendente: false,
     _ouvintes: new Set(), _fb: null, _db: null, _auth: null, _unsub: null, _ref: null,
-    _ultimo: null, _aoReceber: null, _obterLocal: null,
+    _ultimo: null, _aoReceber: null, _obterLocal: null, _mesclar: false, _adotar: false,
+    // último estado em comum com a nuvem, guardado no aparelho por conta: é a base para mandar à nuvem
+    // o que foi alterado aqui enquanto não havia sincronização (Firebase fora do ar, ou antes do 1º retorno)
+    _chaveBase() { return "estudos:base:" + (this.user ? this.user.uid : ""); },
+    _base(v) { this._ultimo = v; if (this.user)
+        lsSet(this._chaveBase(), JSON.stringify(v)); },
+    _gravar(p) {
+        const F = this._fb, t = { atualizadoEm: Date.now() };
+        if (!Array.isArray(p))
+            return F.setDoc(this._ref, { ...p, ...t }, { merge: true });
+        // remover e acrescentar no mesmo campo: um lote só, aplicado em ordem e guardado inteiro na fila offline
+        const lote = F.writeBatch(this._db);
+        p.forEach((x) => lote.set(this._ref, { ...x, ...t }, { merge: true }));
+        return lote.commit();
+    },
     on(fn) { this._ouvintes.add(fn); return () => this._ouvintes.delete(fn); },
     _emit() {
         const s = { status: this.status, user: this.user, erro: this.erro, pendente: this.pendente };
@@ -551,6 +582,8 @@ const Sync = {
         const F = this._fb;
         this._ref = F.doc(this._db, "usuarios", u.uid, "estado", "app");
         this._set({ user: { uid: u.uid, email: u.email || "", nome: u.displayName || "" }, status: "sincronizando" });
+        this._ultimo = null;
+        this._mesclar = true;
         const chaveVinculo = "estudos:vinculo";
         this._unsub = F.onSnapshot(this._ref, { includeMetadataChanges: true }, async (snap) => {
             const pend = snap.metadata.hasPendingWrites;
@@ -563,9 +596,10 @@ const Sync = {
                 } // ainda não sabemos se existe na nuvem
                 // primeira vez nesta conta: envia o estado deste aparelho
                 const local = paraNuvem(this._obterLocal());
-                this._ultimo = local;
+                this._base(local);
+                this._mesclar = false;
                 lsSet(chaveVinculo, u.uid);
-                await F.setDoc(this._ref, { ...diferenca(VAZIO_NUVEM, local, F), atualizadoEm: Date.now() }, { merge: true });
+                await this._gravar(diferenca(VAZIO_NUVEM, local, F));
                 return;
             }
             if (lsGet(chaveVinculo) !== u.uid) {
@@ -577,24 +611,43 @@ const Sync = {
                 const local = paraNuvem(this._obterLocal());
                 const remoto = paraNuvem(daNuvem(snap.data()));
                 lsSet(chaveVinculo, u.uid);
-                if (!igual(local, remoto) && !window.confirm("Esta conta já tem progresso salvo na nuvem.\n\nOK: usar o progresso da nuvem neste aparelho.\n" +
+                this._mesclar = false;
+                if (!igual(paraNuvem(daNuvem(local)), remoto) && !window.confirm("Esta conta já tem progresso salvo na nuvem.\n\nOK: usar o progresso da nuvem neste aparelho.\n" +
                     "Cancelar: substituir a nuvem pelo progresso deste aparelho.")) {
-                    this._ultimo = local;
+                    this._base(local);
                     const p = diferenca(remoto, local, F);
                     if (p)
-                        await F.setDoc(this._ref, { ...p, atualizadoEm: Date.now() }, { merge: true });
+                        await this._gravar(p);
+                    return;
+                }
+            }
+            if (this._mesclar) {
+                // primeiro retorno da nuvem nesta sessão: o que mudou aqui desde a última sincronização vai antes,
+                // como diferença campo a campo; a nuvem combina e o próximo retorno já traz tudo junto
+                this._mesclar = false;
+                let base = null;
+                try {
+                    base = JSON.parse(lsGet(this._chaveBase()) || "null");
+                }
+                catch { }
+                const p = base ? diferenca(base, paraNuvem(this._obterLocal()), F) : null;
+                if (p) {
+                    this._base(paraNuvem(this._obterLocal()));
+                    this._adotar = true; // alterações daqui seguem normalmente
+                    this._gravar(p).catch((e) => this._set({ status: "erro", erro: e.code || String(e) }));
+                    st();
                     return;
                 }
             }
             const est = daNuvem(snap.data());
-            if (pend) {
-                // eco das nossas próprias gravações ainda não confirmadas: não reaplica
-                if (!this._ultimo)
-                    this._ultimo = paraNuvem(est);
+            // eco das nossas gravações ainda não confirmadas: não reaplica (salvo o primeiro depois da mesclagem)
+            if (pend && this._ultimo && !this._adotar) {
                 st();
                 return;
             }
-            this._ultimo = paraNuvem(est);
+            this._mesclar = false;
+            this._adotar = false;
+            this._base(paraNuvem(est));
             this._aoReceber(est);
             st();
         }, (e) => this._set({ status: "erro", erro: e.code || String(e) }));
@@ -602,14 +655,17 @@ const Sync = {
     enviar(estado) {
         if (!this._ref || !this._ultimo || !this.user)
             return;
-        const nov = paraNuvem(estado);
-        const p = diferenca(this._ultimo, nov, this._fb);
-        this._ultimo = nov;
+        const ant = this._ultimo, nov = paraNuvem(estado);
+        const p = diferenca(ant, nov, this._fb);
         if (!p)
             return;
+        this._base(nov);
         this._set({ pendente: true, status: navigator.onLine ? "enviando" : "offline" });
-        this._fb.setDoc(this._ref, { ...p, atualizadoEm: Date.now() }, { merge: true })
-            .catch((e) => this._set({ status: "erro", erro: e.code || String(e) }));
+        this._gravar(p).catch((e) => {
+            if (this._ultimo === nov)
+                this._base(ant); // volta a base: a próxima alteração reenvia esta também
+            this._set({ status: "erro", erro: e.code || String(e) });
+        });
     },
     async entrarGoogle() {
         const F = this._fb;
@@ -639,6 +695,7 @@ const Sync = {
     async sair() { if (this._auth) {
         await this._fb.signOut(this._auth);
         lsSet("estudos:vinculo", "");
+        this._ultimo = null;
     } },
 };
 function traduzErro(e) {
@@ -674,11 +731,12 @@ function useSync() {
    Firebase; a leitura em si só acontece no aparelho que tem o Anki.
    ============================================================ */
 const ANKI_LOCAL = "estudos:anki-local";
+const ANKI_PADRAO = { ativo: false, url: "http://127.0.0.1:8765", baralhos: [] };
 const ankiLocal = () => { try {
-    return { ativo: false, url: "http://127.0.0.1:8765", baralhos: [], ...JSON.parse(lsGet(ANKI_LOCAL) || "{}") };
+    return { ...ANKI_PADRAO, ...JSON.parse(lsGet(ANKI_LOCAL) || "{}") };
 }
 catch {
-    return { ativo: false, url: "http://127.0.0.1:8765", baralhos: [] };
+    return { ...ANKI_PADRAO };
 } };
 const salvarAnkiLocal = (o) => lsSet(ANKI_LOCAL, JSON.stringify(o));
 const Anki = {
@@ -791,11 +849,15 @@ function associarAutomatico(blocos, baralhos) {
         return { b, romanos: t.filter((x) => ROMANOS.has(x)), pal: t.filter((x) => !ROMANOS.has(x)) };
     });
     const N = textos.length;
-    // palavras raras pesam mais; palavras que não aparecem em nenhuma aula não ajudam a escolher e pesam o mínimo
-    const peso = (u) => {
-        const df = textos.filter((x) => x.pal.some((t) => mesmo(t, u))).length;
-        return df === 0 ? 0.2 : Math.log(1 + N / df);
+    // aulas que contêm cada palavra (calculado uma vez por palavra: os baralhos repetem muito as mesmas)
+    const cobertura = new Map();
+    const aulasCom = (u) => {
+        if (!cobertura.has(u))
+            cobertura.set(u, new Set(textos.flatMap((x, i) => (x.pal.some((t) => mesmo(t, u)) ? [i] : []))));
+        return cobertura.get(u);
     };
+    // palavras raras pesam mais; palavras que não aparecem em nenhuma aula não ajudam a escolher e pesam o mínimo
+    const peso = (u) => { const df = aulasCom(u).size; return df === 0 ? 0.2 : Math.log(1 + N / df); };
     const mapa = {};
     baralhos.forEach((d) => {
         const B = tokens(d.split("::").pop());
@@ -804,12 +866,12 @@ function associarAutomatico(blocos, baralhos) {
             return;
         const pesos = pal.map(peso), totalPeso = pesos.reduce((a, x) => a + x, 0);
         const area = areaDoBaralho(d);
-        const notas = textos.map((x) => {
+        const notas = textos.map((x, i) => {
             if (area && x.b.area !== area)
                 return [x.b, 0];
             if (rB.length && x.romanos.length && rB.join() !== x.romanos.join())
                 return [x.b, 0];
-            const cob = pal.reduce((a, u, k) => a + (x.pal.some((t) => mesmo(t, u)) ? pesos[k] : 0), 0) / totalPeso;
+            const cob = pal.reduce((a, u, k) => a + (aulasCom(u).has(i) ? pesos[k] : 0), 0) / totalPeso;
             return [x.b, cob];
         });
         const max = Math.max(0, ...notas.map((x) => x[1]));
@@ -847,16 +909,21 @@ const Atualizador = {
             }
             this.reg.addEventListener("updatefound", () => vigiar(this.reg.installing));
             let recarregou = false;
-            navigator.serviceWorker.addEventListener("controllerchange", () => { if (!recarregou) {
-                recarregou = true;
-                location.reload();
-            } });
+            const tinhaVersao = !!navigator.serviceWorker.controller;
+            navigator.serviceWorker.addEventListener("controllerchange", () => {
+                if ((tinhaVersao || this.pediu) && !recarregou) {
+                    recarregou = true;
+                    location.reload();
+                }
+            });
             setInterval(() => this.reg && this.reg.update().catch(() => { }), 60 * 60 * 1000);
         }
         catch { }
     },
-    aplicar() { if (this.esperando)
-        this.esperando.postMessage("PULAR_ESPERA"); },
+    aplicar() { if (this.esperando) {
+        this.pediu = true;
+        this.esperando.postMessage("PULAR_ESPERA");
+    } },
     async verificar() {
         let remota = null;
         try {
@@ -876,6 +943,18 @@ function useAtualizacao() {
     useEffect(() => Atualizador.on(setTem), []);
     return tem;
 }
+// data de hoje (São Paulo) que se atualiza sozinha: ao voltar para o app e a cada minuto
+function useHoje() {
+    const [h, setH] = useState(hojeISO);
+    useEffect(() => {
+        const f = () => setH(hojeISO());
+        const t = setInterval(f, 60 * 1000);
+        document.addEventListener("visibilitychange", f);
+        return () => { clearInterval(t); document.removeEventListener("visibilitychange", f); };
+    }, []);
+    return h;
+}
+const paraRegistro = (i) => ({ id: i.id, tipo: i.tipo, tema: i.tema, rotulo: i.rotulo, peso: i.peso, semana: i.semana });
 /* ============================================================ */
 function App() {
     const [pronto, setPronto] = useState(false);
@@ -888,7 +967,7 @@ function App() {
     const [anki, setAnki] = useState({});
     const [bonusAdiado, setBonusAdiado] = useState({});
     const [aba, setAba] = useState("semana");
-    const hoje = hojeISO();
+    const hoje = useHoje();
     const segAtual = sabado(hoje);
     const sync = useSync();
     const temAtualizacao = useAtualizacao();
@@ -940,24 +1019,59 @@ function App() {
             return;
         const nAd = { ...adiados }, nReg = { ...registro };
         abertas.forEach((k) => {
-            registro[k].planejados.forEach((p) => { if (!registro[k].feitos.includes(p.id))
-                nAd[p.id] = (nAd[p.id] || 0) + 1; });
-            nReg[k] = { ...registro[k], fechada: true };
+            const faltam = registro[k].planejados.filter((p) => !registro[k].feitos.includes(p.id));
+            faltam.forEach((p) => { nAd[p.id] = (nAd[p.id] || 0) + 1; });
+            nReg[k] = { ...registro[k], fechada: true, revisar: faltam.length > 0 };
         });
         setAdiados(nAd);
         setRegistro(nReg);
     }, [pronto, segAtual, registro, adiados]);
     const fora = useMemo(() => new Set(excluidos[segAtual] || []), [excluidos, segAtual]);
-    const plano = useMemo(() => construir(blocos, bonus, cfg, hoje, adiados, fora, bonusAdiado), [blocos, bonus, cfg, hoje, adiados, fora, bonusAdiado]);
+    const regAtual = registro[segAtual];
+    const jaFeito = useMemo(() => {
+        const f = new Set(regAtual ? regAtual.feitos : []), l = regAtual ? regAtual.planejados.filter((p) => f.has(p.id)) : [];
+        return { pontos: l.reduce((a, p) => a + (p.peso || 0), 0), nRev: l.filter((p) => p.tipo === "revisao").length,
+            nBns: l.filter((p) => p.tipo === "bonus").length };
+    }, [regAtual]);
+    const plano = useMemo(() => construir(blocos, bonus, cfg, hoje, adiados, fora, bonusAdiado, jaFeito), [blocos, bonus, cfg, hoje, adiados, fora, bonusAdiado, jaFeito]);
     const sem0 = plano.semanas[0];
+    // O registro da semana acompanha o plano: entra o que passou a caber, sai o que não está mais na semana
+    // (o que já foi feito fica). Só depois que a virada terminou de fechar semanas e avançar o extensivo.
+    const disputa = useRef({ ids: "", em: 0, ate: 0 });
+    const viradaPronta = !Object.keys(registro).some((k) => k < segAtual && !registro[k].fechada)
+        && (!cfg.semanaBaseSeg || cfg.semanaBaseSeg >= segAtual);
     useEffect(() => {
-        if (!pronto || !sem0 || registro[segAtual])
+        if (!pronto || !sem0 || !viradaPronta)
             return;
-        setRegistro((r) => ({ ...r, [segAtual]: {
-                planejados: sem0.itens.map((i) => ({ id: i.id, tipo: i.tipo, tema: i.tema, rotulo: i.rotulo, peso: i.peso, semana: i.semana })),
-                feitos: [], fechada: false
-            } }));
-    }, [pronto, segAtual, sem0, registro]);
+        const s = registro[segAtual];
+        if (!s) {
+            setRegistro((r) => ({ ...r, [segAtual]: { planejados: sem0.itens.map(paraRegistro), feitos: [], fechada: false, auto: {}, manual: {} } }));
+            return;
+        }
+        const feitos = new Set(s.feitos), noPlano = new Set(sem0.itens.map((i) => i.id));
+        let manter = s.planejados.filter((p) => feitos.has(p.id) || noPlano.has(p.id));
+        // Um aparelho ainda na versão anterior devolve o que esta tira. Se as mesmas remoções voltarem em menos de
+        // um minuto, para de disputar por 10 minutos (evita gravações sem fim) até o outro aparelho atualizar.
+        const tirar = s.planejados.filter((p) => !manter.includes(p)).map((p) => p.id).sort().join();
+        if (tirar) {
+            const g = disputa.current, agora = Date.now();
+            if (agora < g.ate)
+                manter = s.planejados;
+            else if (tirar === g.ids && agora - g.em < 60000) {
+                g.ate = agora + 10 * 60000;
+                manter = s.planejados;
+            }
+            else {
+                g.ids = tirar;
+                g.em = agora;
+            }
+        }
+        const tem = new Set(manter.map((p) => p.id));
+        const novas = sem0.itens.filter((i) => !tem.has(i.id)).map(paraRegistro);
+        if (!novas.length && manter.length === s.planejados.length)
+            return;
+        setRegistro((r) => ({ ...r, [segAtual]: { ...r[segAtual], planejados: [...manter, ...novas] } }));
+    }, [pronto, sem0, registro, segAtual, viradaPronta]);
     // origem: "manual" (toque do usuário) ou "auto" (leitura do Anki)
     const concluir = useCallback((item, origem = "manual") => {
         setRegistro((r) => {
@@ -995,7 +1109,9 @@ function App() {
             const s = r[segAtual];
             if (!s)
                 return r;
-            const feitos = s.feitos.filter((x) => x !== entrada.id);
+            const [bid, et] = String(entrada.id).split(":");
+            const feitos = s.feitos.filter((x) => x !== entrada.id
+                && !(et !== undefined && String(x).split(":")[0] === bid && Number(String(x).split(":")[1]) > Number(et)));
             const planejados = modo === "remover" ? s.planejados.filter((p) => p.id !== entrada.id) : s.planejados;
             const auto = { ...(s.auto || {}) }, manual = { ...(s.manual || {}) };
             delete auto[entrada.id];
@@ -1019,8 +1135,93 @@ function App() {
             setBlocos((bs) => bs.map((b) => (b.id === blocoId ? voltarBloco(b, et) : b)));
         }
     }, [segAtual]);
-    const recuar = useCallback((id) => setBlocos((bs) => bs.map((b) => b.id === id ? voltarBloco(b, Math.max(0, b.etapa - 1)) : b)), []);
-    const avancar = useCallback((id) => setBlocos((bs) => bs.map((b) => b.id === id && b.etapa < CONCLUIDO ? avancarBloco(b, b.etapa, hojeISO()) : b)), []);
+    // Painel da virada: registra na semana que fechou o que foi feito e ficou sem marcar.
+    // Desfaz o adiamento que o fechamento aplicou e avança o tema com a data do último dia daquela semana.
+    const pendentesDaVirada = useMemo(() => {
+        const anterior = addDays(segAtual, -7);
+        const k = Object.keys(registro).sort().find((x) => {
+            const r = registro[x];
+            // semanas fechadas antes desta versão (sem a marca) só entram se forem a imediatamente anterior
+            return x < segAtual && r.fechada && (r.revisar === true || (r.revisar === undefined && x === anterior));
+        });
+        if (!k)
+            return null;
+        const r = registro[k], bl = Object.fromEntries(blocos.map((b) => [b.id, b])), bx = Object.fromEntries(bonus.map((b) => [b.id, b]));
+        const aberto = (p) => {
+            if (r.feitos.includes(p.id))
+                return false;
+            if (p.tipo === "bonus")
+                return !!bx[p.id] && !bx[p.id].feito;
+            const [bid, e] = String(p.id).split(":");
+            return !!bl[bid] && bl[bid].etapa <= Number(e);
+        };
+        return { k, itens: r.planejados.filter(aberto) };
+    }, [registro, blocos, bonus, segAtual]);
+    const fecharVirada = useCallback((k, ids) => {
+        const r0 = atual.current.registro[k];
+        if (!r0)
+            return;
+        // marcar um degrau inclui os anteriores do mesmo tema que estavam na semana
+        const todos = new Set(ids);
+        ids.forEach((id) => {
+            const [bid, e] = String(id).split(":");
+            r0.planejados.forEach((p) => {
+                const [pb, pe] = String(p.id).split(":");
+                if (e !== undefined && pb === bid && Number(pe) < Number(e) && !r0.feitos.includes(p.id))
+                    todos.add(p.id);
+            });
+        });
+        const lista = [...todos], quando = addDays(k, 6) < hoje ? addDays(k, 6) : hoje;
+        setRegistro((r) => ({ ...r, [k]: { ...r[k], revisar: false, feitos: [...new Set([...r[k].feitos, ...lista])] } }));
+        if (!lista.length)
+            return;
+        setAdiados((a) => {
+            const n = { ...a };
+            lista.forEach((id) => { if (n[id] > 1)
+                n[id]--;
+            else
+                delete n[id]; });
+            return n;
+        });
+        setBonus((bs) => bs.map((x) => (todos.has(x.id) ? { ...x, feito: true } : x)));
+        setBlocos((bs) => bs.map((b) => {
+            const es = lista.filter((id) => String(id).split(":")[0] === b.id).map((id) => Number(String(id).split(":")[1]));
+            return es.length ? avancarBloco(b, Math.max(...es), quando) : b;
+        }));
+    }, [hoje]);
+    // se tudo da semana que fechou já foi resolvido (p. ex. em outro aparelho), o painel nem aparece
+    useEffect(() => {
+        if (pronto && pendentesDaVirada && !pendentesDaVirada.itens.length)
+            fecharVirada(pendentesDaVirada.k, []);
+    }, [pronto, pendentesDaVirada, fecharVirada]);
+    const [viradaDepois, setViradaDepois] = useState(false);
+    // Mapa: correção do estado de um tema. Não conta pontos na semana, mas mantém checklist e adiadas coerentes.
+    const recuar = useCallback((id) => {
+        const b = atual.current.blocos.find((x) => x.id === id);
+        if (!b || b.etapa === 0)
+            return;
+        const et = b.etapa - 1;
+        const novos = atual.current.blocos.map((x) => (x.id === id ? voltarBloco(x, et) : x));
+        atual.current.blocos = novos;
+        setBlocos(novos);
+        setRegistro((r) => {
+            const s = r[segAtual];
+            if (!s)
+                return r;
+            const feitos = s.feitos.filter((x) => !(String(x).split(":")[0] === id && Number(String(x).split(":")[1]) >= et));
+            return feitos.length === s.feitos.length ? r : { ...r, [segAtual]: { ...s, feitos } };
+        });
+    }, [segAtual]);
+    const avancar = useCallback((id) => {
+        const b = atual.current.blocos.find((x) => x.id === id);
+        if (!b || b.etapa >= CONCLUIDO)
+            return;
+        const novos = atual.current.blocos.map((x) => (x.id === id ? avancarBloco(x, x.etapa, hoje) : x));
+        atual.current.blocos = novos;
+        setBlocos(novos);
+        setAdiados((a) => { const k = id + ":" + b.etapa; if (!a[k])
+            return a; const n = { ...a }; delete n[k]; return n; });
+    }, [hoje]);
     // A semana do extensivo avança junto com o calendário, sem precisar editar nada.
     useEffect(() => {
         if (!pronto || !cfg.semanaBaseSeg)
@@ -1033,6 +1234,12 @@ function App() {
     }, [pronto, segAtual, cfg.semanaAtual, cfg.semanaBaseSeg]);
     // Troca das aulas bônus da semana: as escolhidas saem para o fim da fila e entram
     // outras, do mesmo nível de estrelas enquanto houver.
+    const marcarPerguntado = useCallback(() => setRegistro((r) => {
+        const s = r[segAtual];
+        if (!s || s.bonusPerguntado)
+            return r;
+        return { ...r, [segAtual]: { ...s, bonusPerguntado: true } };
+    }), [segAtual]);
     const trocarBonus = useCallback((ids) => {
         if (!ids.length) {
             marcarPerguntado();
@@ -1040,7 +1247,6 @@ function App() {
         }
         const volta = addDays(segAtual, 7 * Math.max(1, cfg.semanasAdiamentoBonus));
         setBonusAdiado((b) => { const n = { ...b }; ids.forEach((id) => { n[id] = volta; }); return n; });
-        setExcluidos((e) => ({ ...e, [segAtual]: [...new Set([...(e[segAtual] || []), ...ids])] }));
         setRegistro((r) => {
             const s = r[segAtual];
             if (!s)
@@ -1049,27 +1255,7 @@ function App() {
                     planejados: s.planejados.filter((p) => !ids.includes(p.id)),
                     feitos: s.feitos.filter((x) => !ids.includes(x)) } };
         });
-    }, [segAtual, cfg.semanasAdiamentoBonus]);
-    const marcarPerguntado = useCallback(() => setRegistro((r) => {
-        const s = r[segAtual];
-        if (!s || s.bonusPerguntado)
-            return r;
-        return { ...r, [segAtual]: { ...s, bonusPerguntado: true } };
-    }), [segAtual]);
-    // depois de uma troca, as substitutas entram no checklist desta semana
-    useEffect(() => {
-        if (!pronto || !sem0)
-            return;
-        const s = registro[segAtual];
-        if (!s)
-            return;
-        const atuais = new Set(s.planejados.map((p) => p.id));
-        const novas = sem0.itens.filter((i) => !atuais.has(i.id))
-            .map((i) => ({ id: i.id, tipo: i.tipo, tema: i.tema, rotulo: i.rotulo, peso: i.peso, semana: i.semana }));
-        if (!novas.length)
-            return;
-        setRegistro((r) => ({ ...r, [segAtual]: { ...r[segAtual], planejados: [...r[segAtual].planejados, ...novas] } }));
-    }, [pronto, sem0, registro, segAtual]);
+    }, [segAtual, cfg.semanasAdiamentoBonus, marcarPerguntado]);
     // leitura do Anki (só no aparelho em que ela foi ativada)
     const [ankiMsg, setAnkiMsg] = useState("");
     const lerAnki = useCallback(async () => {
@@ -1108,7 +1294,7 @@ function App() {
     //  - marca quando o baralho zerou e houve revisão desde sábado;
     //  - desmarca (volta às pendências) se uma leitura posterior mostrar cartões vencidos de novo.
     // O que você marcou ou desmarcou à mão nesta semana prevalece sobre a leitura automática.
-    const jaFeito = useRef(new Set());
+    const ankiVisto = useRef(new Set());
     useEffect(() => {
         if (!pronto || !cfg.ankiAuto || !sem0)
             return;
@@ -1121,12 +1307,12 @@ function App() {
             if (it.tipo !== "revisao" || feitosSem.has(it.id))
                 return;
             const st = anki[it.blocoId], chave = it.id + ":m:" + (st && st.em), m = manual[it.id];
-            if (!st || jaFeito.current.has(chave))
+            if (!st || ankiVisto.current.has(chave))
                 return;
             if (m && m.v === false && !(st.rev > (m.rev || 0)))
                 return; // desmarcado à mão e sem revisão nova
             if (st.em >= inicio && st.total > 0 && st.pend === 0 && st.rev > 0) {
-                jaFeito.current.add(chave);
+                ankiVisto.current.add(chave);
                 concluir(it, "auto");
             }
         });
@@ -1134,10 +1320,10 @@ function App() {
             if (p.tipo !== "revisao" || !feitosSem.has(p.id) || !auto[p.id] || (manual[p.id] && manual[p.id].v === true))
                 return;
             const st = anki[String(p.id).split(":")[0]], chave = p.id + ":d:" + (st && st.em);
-            if (!st || jaFeito.current.has(chave))
+            if (!st || ankiVisto.current.has(chave))
                 return;
             if (st.em > auto[p.id] && st.pend > 0) {
-                jaFeito.current.add(chave);
+                ankiVisto.current.add(chave);
                 desfazer(p, "pendencia", "auto");
             }
         });
@@ -1151,13 +1337,14 @@ function App() {
             React.createElement("span", { style: { fontSize: 13, color: C.ink } }, "Nova vers\u00E3o dispon\u00EDvel."),
             React.createElement("button", { onClick: () => Atualizador.aplicar(), style: { background: C.teal, color: C.base, border: "none",
                     padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: SANS } }, "Atualizar"))),
+        pendentesDaVirada && pendentesDaVirada.itens.length > 0 && !viradaDepois && (React.createElement(PainelVirada, { k: pendentesDaVirada.k, itens: pendentesDaVirada.itens, fechar: fecharVirada, depois: () => setViradaDepois(true) })),
         React.createElement(Cabecalho, { plano: plano, cfg: cfg, blocos: blocos, hoje: hoje, registro: registro, segAtual: segAtual, sync: sync }),
         React.createElement("div", { style: { padding: "0 14px 96px" } },
             aba === "semana" && React.createElement(Semana, { plano: plano, cfg: cfg, registro: registro, segAtual: segAtual, concluir: concluir, desfazer: desfazer, anki: anki, trocarBonus: trocarBonus, manterBonus: marcarPerguntado, bonusAdiado: bonusAdiado }),
             aba === "plano" && React.createElement(PlanoSemanal, { plano: plano, segAtual: segAtual, cfg: cfg }),
             aba === "bonus" && React.createElement(Bonus, { bonus: bonus, cfg: cfg, setCfg: setCfg, toggle: (id) => setBonus((bs) => bs.map((x) => x.id === id ? { ...x, feito: !x.feito } : x)) }),
             aba === "mapa" && React.createElement(Mapa, { blocos: blocos, recuar: recuar, avancar: avancar, cfg: cfg, adiados: adiados }),
-            aba === "dados" && React.createElement(Dados, { cfg: cfg, setCfg: setCfg, blocos: blocos, setBlocos: setBlocos, bonus: bonus, setBonus: setBonus, registro: registro, setRegistro: setRegistro, adiados: adiados, setAdiados: setAdiados, setExcluidos: setExcluidos, excluidos: excluidos, plano: plano, hoje: hoje, sync: sync, anki: anki, setAnki: setAnki, lerAnki: lerAnki, ankiMsg: ankiMsg })),
+            aba === "dados" && React.createElement(Dados, { estado: atual.current, aplicarEstado: aplicarEstado, setCfg: setCfg, setBlocos: setBlocos, setAdiados: setAdiados, plano: plano, hoje: hoje, sync: sync, lerAnki: lerAnki, ankiMsg: ankiMsg })),
         React.createElement("nav", { style: { position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", background: C.surface, borderTop: `1px solid ${C.line}`, zIndex: 20 } }, abas.map(([k, l]) => (React.createElement("button", { key: k, onClick: () => setAba(k), style: {
                 flex: 1, padding: "12px 2px 16px", border: "none", background: "none", fontFamily: SANS, fontSize: 11.5,
                 cursor: "pointer", color: aba === k ? C.teal : C.ink2, fontWeight: aba === k ? 650 : 450,
@@ -1226,6 +1413,43 @@ function Caixa({ valor, rot }) {
         React.createElement("div", { style: { fontFamily: SERIF, fontSize: 20, lineHeight: 1 } }, valor),
         React.createElement("div", { style: { fontSize: 10, color: C.ink2, marginTop: 4, lineHeight: 1.2 } }, rot)));
 }
+/* ---------- VIRADA DA SEMANA: o que ficou sem marcar ---------- */
+const GRUPOS_VIRADA = [["aula", "Aulas"], ["questoes", "Questões"], ["revisao", "Revisões · flashcards"], ["bonus", "Aulas bônus"]];
+function PainelVirada({ k, itens, fechar, depois }) {
+    const [sel, setSel] = useState(() => new Set());
+    const alterna = (id, v) => setSel((x) => { const n = new Set(x); v ? n.add(id) : n.delete(id); return n; });
+    const pts = itens.filter((i) => sel.has(i.id)).reduce((a, i) => a + (i.peso || 0), 0);
+    return (React.createElement("div", { role: "dialog", "aria-modal": "true", "aria-label": "Fechamento da semana", style: { position: "fixed", inset: 0, zIndex: 50, background: "rgba(8,12,16,0.78)", display: "flex",
+            alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: "28px 12px" } },
+        React.createElement("div", { style: { background: C.surface, width: "100%", maxWidth: 460, padding: "16px 15px", borderTop: `3px solid ${C.teal}` } },
+            React.createElement("div", { style: { fontSize: 11.5, color: C.ink2, textTransform: "uppercase", letterSpacing: "0.05em" } },
+                "Semana encerrada \u00B7 ",
+                rotuloSemana(k)),
+            React.createElement("div", { style: { fontFamily: SERIF, fontSize: 20, margin: "6px 0 4px", lineHeight: 1.25 } }, "Algo foi feito e ficou sem marcar?"),
+            React.createElement("div", { style: nota(0) }, "O que voc\u00EA marcar conta para aquela semana e sai das metas redistribu\u00EDdas. O restante segue redistribu\u00EDdo."),
+            GRUPOS_VIRADA.map(([t, nome]) => {
+                const l = itens.filter((i) => i.tipo === t);
+                return l.length > 0 && (React.createElement("div", { key: t, style: { marginTop: 13 } },
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 } },
+                        React.createElement("span", { style: { fontSize: 11, color: C.ink2, textTransform: "uppercase", letterSpacing: "0.04em" } },
+                            nome,
+                            " \u00B7 ",
+                            l.length),
+                        React.createElement("button", { onClick: () => { const todas = l.every((i) => sel.has(i.id)); l.forEach((i) => alterna(i.id, !todas)); }, style: { border: "none", background: "none", color: C.teal, fontSize: 11.5, cursor: "pointer", padding: 0 } }, l.every((i) => sel.has(i.id)) ? "desmarcar todas" : "marcar todas")),
+                    React.createElement("div", { style: { display: "grid", gap: 8 } }, l.map((i) => (React.createElement(Opcao, { key: i.id, marcada: sel.has(i.id), aoMudar: (v) => alterna(i.id, v), cor: C.teal },
+                        React.createElement("span", { style: { lineHeight: 1.35 } },
+                            i.tema,
+                            React.createElement("span", { style: { color: C.ink2, fontSize: 11.5 } },
+                                i.tipo === "revisao" || i.tipo === "questoes" ? ` · ${i.rotulo}` : "",
+                                " \u00B7 ",
+                                i.peso,
+                                " pts"))))))));
+            }),
+            React.createElement("div", { style: { display: "flex", gap: 7, marginTop: 16, position: "sticky", bottom: -28,
+                    background: C.surface, padding: "10px 0 12px", borderTop: `1px solid ${C.line}` } },
+                React.createElement("button", { style: { ...BOTAO, flex: 1 }, onClick: () => fechar(k, [...sel]) }, sel.size ? `Registrar ${sel.size} ${sel.size > 1 ? "itens" : "item"} · ${pts} pts` : "Nada a acrescentar"),
+                React.createElement("button", { style: { ...BOTAO2, borderColor: C.line, color: C.ink2 }, onClick: depois }, "Agora n\u00E3o")))));
+}
 /* ---------- SEMANA: quatro checklists ---------- */
 function TrocaBonus({ itens, aberto, setAberto, trocar, manter, perguntado }) {
     const [sel, setSel] = useState(() => new Set(itens.map((i) => i.id)));
@@ -1233,15 +1457,14 @@ function TrocaBonus({ itens, aberto, setAberto, trocar, manter, perguntado }) {
     if (!itens.length)
         return null;
     const alterna = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-    const btn = { flex: 1, padding: "9px 8px", fontSize: 12.5, cursor: "pointer", fontFamily: SANS,
-        border: `1px solid ${C.star}`, background: "transparent", color: C.star };
+    const BTN = { ...BOTAO2, flex: 1, padding: "9px 8px", fontSize: 12.5, border: `1px solid ${C.star}`, color: C.star };
     if (!aberto) {
         return perguntado ? null : (React.createElement("div", { style: { background: C.surface, borderLeft: `3px solid ${C.star}`, padding: "12px 13px", marginTop: 14 } },
             React.createElement("div", { style: { fontSize: 13.5, lineHeight: 1.45 } }, "Semana nova. Quer trocar as aulas b\u00F4nus sugeridas?"),
-            React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 6, lineHeight: 1.5 } }, "As trocadas voltam para o fim da fila e entram outras do mesmo n\u00EDvel de estrelas."),
+            React.createElement("div", { style: nota(6) }, "As trocadas voltam para o fim da fila e entram outras do mesmo n\u00EDvel de estrelas."),
             React.createElement("div", { style: { display: "flex", gap: 7, marginTop: 11 } },
-                React.createElement("button", { style: { ...btn, background: C.star, color: C.base, border: "none" }, onClick: () => setAberto(true) }, "Escolher"),
-                React.createElement("button", { style: { ...btn, borderColor: C.line, color: C.ink2 }, onClick: manter }, "Manter estas"))));
+                React.createElement("button", { style: { ...BTN, background: C.star, color: C.base, border: "none" }, onClick: () => setAberto(true) }, "Escolher"),
+                React.createElement("button", { style: { ...BTN, borderColor: C.line, color: C.ink2 }, onClick: manter }, "Manter estas"))));
     }
     return (React.createElement("div", { style: { background: C.surface, borderLeft: `3px solid ${C.star}`, padding: "12px 13px", marginTop: 14 } },
         React.createElement("div", { style: { fontSize: 13, marginBottom: 4 } }, "Quais b\u00F4nus trocar?"),
@@ -1257,10 +1480,10 @@ function TrocaBonus({ itens, aberto, setAberto, trocar, manter, perguntado }) {
                     " \u00B7 semana ",
                     i.semana))))),
         React.createElement("div", { style: { display: "flex", gap: 7, marginTop: 10 } },
-            React.createElement("button", { style: { ...btn, background: C.star, color: C.base, border: "none" }, onClick: () => { trocar([...sel]); setAberto(false); } },
+            React.createElement("button", { style: { ...BTN, background: C.star, color: C.base, border: "none" }, onClick: () => { trocar([...sel]); setAberto(false); } },
                 "Trocar ",
                 sel.size === itens.length ? "todas" : `(${sel.size})`),
-            React.createElement("button", { style: { ...btn, borderColor: C.line, color: C.ink2 }, onClick: () => { manter(); setAberto(false); } }, "Cancelar"))));
+            React.createElement("button", { style: { ...BTN, borderColor: C.line, color: C.ink2 }, onClick: () => { manter(); setAberto(false); } }, "Cancelar"))));
 }
 function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki, trocarBonus, manterBonus, bonusAdiado }) {
     const [trocaAberta, setTrocaAberta] = useState(false);
@@ -1281,13 +1504,13 @@ function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki, troc
     return (React.createElement("div", null,
         React.createElement(Grafico, { registro: registro, segAtual: segAtual, plano: plano }),
         React.createElement(TrocaBonus, { itens: itens.filter((i) => i.tipo === "bonus"), aberto: trocaAberta, setAberto: setTrocaAberta, trocar: trocarBonus, manter: manterBonus, perguntado: !!s.bonusPerguntado }),
-        sem && sem.pontos > sem.cap && (React.createElement("div", { style: { background: C.amberSoft, borderLeft: `3px solid ${C.amber}`, padding: "10px 12px",
-                marginTop: 14, fontSize: 12.5, lineHeight: 1.5 } },
-            "As aulas desta semana ocupam ",
-            sem.pontos,
-            " pontos, acima da capacidade de ",
-            sem.cap,
-            ". Elas t\u00EAm prioridade e ficam na semana; o resto foi adiado. Se isso se repetir, aumente a capacidade em Dados.")),
+        sem && sem.pontos > sem.cap && (React.createElement("div", { style: { marginTop: 14 } },
+            React.createElement(Aviso, null,
+                "As aulas desta semana ocupam ",
+                sem.pontos,
+                " pontos, acima da capacidade de ",
+                sem.cap,
+                ". Elas t\u00EAm prioridade e ficam na semana; o resto foi adiado. Se isso se repetir, aumente a capacidade em Dados."))),
         React.createElement(SecaoTitulo, { texto: `Checklist da semana · ${feitoPts} de ${sem ? sem.pontos : 0} pontos${sem && sem.fator < 1 ? ` · carga reduzida ${Math.round((1 - sem.fator) * 100)}%` : ""}` }),
         itens.length === 0 && React.createElement(Vazio, { texto: "Semana zerada. Os objetivos da pr\u00F3xima aparecem no s\u00E1bado." }),
         grupos.map(([t, l, cor]) => l.length > 0 && (React.createElement("div", { key: t, style: { marginBottom: 14 } },
@@ -1394,7 +1617,7 @@ function Grafico({ registro, segAtual, plano }) {
             atual: k === segAtual, previsto: false, fechada: !!r.fechada });
     });
     // semanas futuras já demarcadas até o fim do ano
-    const fimAno = "2026-12-28";
+    const fimAno = segAtual.slice(0, 4) + "-12-31";
     plano.semanas.slice(1).forEach((s) => {
         if (s.seg > fimAno)
             return;
@@ -1457,7 +1680,7 @@ function PlanoSemanal({ plano, segAtual, cfg }) {
                 cont("aula").map((i) => (React.createElement("div", { key: i.id, style: { fontSize: 13.5, lineHeight: 1.5, display: "flex", gap: 7 } },
                     React.createElement("span", { style: { width: 3, background: areaColor(i.area), flexShrink: 0 } }),
                     React.createElement("span", null, i.tema)))),
-                React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 6, lineHeight: 1.5 } },
+                React.createElement("div", { style: nota(6) },
                     cont("questoes").length,
                     " quest\u00F5es \u00B7 ",
                     cont("revisao").length,
@@ -1476,10 +1699,9 @@ function Bonus({ bonus, cfg, setCfg, toggle }) {
     const bf = (a) => ({ flex: 1, padding: "9px 6px", fontSize: 12.5, cursor: "pointer", fontFamily: SANS,
         border: `1px solid ${a ? C.teal : C.line}`, background: a ? C.tealSoft : "transparent", color: a ? C.teal : C.ink2, fontWeight: a ? 600 : 400 });
     return (React.createElement("div", null,
-        React.createElement(SecaoTitulo, { texto: "Banca de refer\u00EAncia" }),
-        React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
+        React.createElement(Secao, { titulo: "Banca de refer\u00EAncia" },
             React.createElement("div", { style: { display: "flex", gap: 7 } }, [["usp", "USP-SP"], ["unifesp", "Unifesp"], ["ambas", "Ambas"]].map(([k, l]) => (React.createElement("button", { key: k, onClick: () => setCfg({ ...cfg, bancaFoco: k }), style: bf(cfg.bancaFoco === k) }, l)))),
-            React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 10, lineHeight: 1.5 } },
+            React.createElement("div", { style: nota(10) },
                 pend.length,
                 " b\u00F4nus priorit\u00E1rias e ",
                 baixa.length,
@@ -1516,7 +1738,7 @@ function Bonus({ bonus, cfg, setCfg, toggle }) {
                         " \u00B7 S",
                         x.semana),
                     peso(x) === 1 && React.createElement("span", { style: { color: C.star } }, " \u2605")))))),
-            React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 11, lineHeight: 1.5 } }, "Uma estrela significa duas ou tr\u00EAs quest\u00F5es entre 2021 e 2025; nenhuma estrela, menos de duas naquela banca. S\u00E3o o fim da fila, n\u00E3o conte\u00FAdo descartado."))));
+            React.createElement("div", { style: nota(11) }, "Uma estrela significa duas ou tr\u00EAs quest\u00F5es entre 2021 e 2025; nenhuma estrela, menos de duas naquela banca. S\u00E3o o fim da fila, n\u00E3o conte\u00FAdo descartado."))));
 }
 /* ---------- MAPA ---------- */
 function Mapa({ blocos, recuar, avancar, cfg, adiados }) {
@@ -1545,9 +1767,9 @@ function Mapa({ blocos, recuar, avancar, cfg, adiados }) {
                 itens.map((b) => (React.createElement("div", { key: b.id, style: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13.5, lineHeight: 1.45, marginBottom: 3 } },
                     React.createElement("span", { style: { borderLeft: `3px solid ${areaColor(b.area)}`, paddingLeft: 7 } },
                         b.tema,
-                        adiados[b.id] ? React.createElement("span", { style: { color: C.amber } },
+                        adiados[b.id + ":" + b.etapa] ? React.createElement("span", { style: { color: C.amber } },
                             " \u00B7 adiada ",
-                            adiados[b.id],
+                            adiados[b.id + ":" + b.etapa],
                             "\u00D7") : null),
                     React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, flexShrink: 0 } },
                         React.createElement("button", { onClick: () => recuar(b.id), disabled: b.etapa === 0, "aria-label": "Recuar etapa", title: "Desmarcar a \u00FAltima etapa", style: { ...passo, opacity: b.etapa === 0 ? 0.3 : 1 } }, "\u2212"),
@@ -1557,12 +1779,12 @@ function Mapa({ blocos, recuar, avancar, cfg, adiados }) {
         })));
 }
 /* ---------- DADOS ---------- */
-function PainelSync({ sync, inp, btn, btnSec }) {
+function PainelSync({ sync }) {
     const [email, setEmail] = useState("");
     const [senha, setSenha] = useState("");
     const configurado = !!(window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.apiKey);
     const [t, cor] = ROTULO_SYNC[sync.status] || ROTULO_SYNC.local;
-    return (React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
+    return (React.createElement("div", { style: CARTAO },
         React.createElement("div", { style: { fontSize: 13, color: cor, marginBottom: 10 } },
             "\u25CF ",
             t),
@@ -1574,20 +1796,20 @@ function PainelSync({ sync, inp, btn, btnSec }) {
             React.createElement("div", { style: { fontSize: 13, lineHeight: 1.5 } },
                 "Conectado como ",
                 sync.user.email || sync.user.nome),
-            React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 6, lineHeight: 1.5 } }, "Sem internet, as marca\u00E7\u00F5es ficam guardadas no aparelho e s\u00E3o enviadas quando a conex\u00E3o voltar."),
-            React.createElement("button", { style: { ...btnSec, marginTop: 11, width: "100%" }, onClick: () => Sync.sair() }, "Sair"))),
+            React.createElement("div", { style: nota(6) }, "Sem internet, as marca\u00E7\u00F5es ficam guardadas no aparelho e s\u00E3o enviadas quando a conex\u00E3o voltar."),
+            React.createElement("button", { style: { ...BOTAO2, marginTop: 11, width: "100%" }, onClick: () => Sync.sair() }, "Sair"))),
         configurado && !sync.user && sync.status !== "conectando" && sync.status !== "indisponivel" && (React.createElement(React.Fragment, null,
-            React.createElement("button", { style: { ...btn, width: "100%" }, onClick: () => Sync.entrarGoogle() }, "Entrar com Google"),
+            React.createElement("button", { style: { ...BOTAO, width: "100%" }, onClick: () => Sync.entrarGoogle() }, "Entrar com Google"),
             React.createElement("div", { style: { fontSize: 11.5, color: C.ink2, margin: "12px 0 6px", textAlign: "center" } }, "ou com e-mail e senha"),
-            React.createElement("input", { style: inp, type: "email", placeholder: "e-mail", value: email, onChange: (e) => setEmail(e.target.value) }),
-            React.createElement("input", { style: { ...inp, marginTop: 7 }, type: "password", placeholder: "senha (m\u00EDn. 6 caracteres)", value: senha, onChange: (e) => setSenha(e.target.value) }),
+            React.createElement("input", { style: CAMPO, type: "email", placeholder: "e-mail", value: email, onChange: (e) => setEmail(e.target.value) }),
+            React.createElement("input", { style: { ...CAMPO, marginTop: 7 }, type: "password", placeholder: "senha (m\u00EDn. 6 caracteres)", value: senha, onChange: (e) => setSenha(e.target.value) }),
             React.createElement("div", { style: { display: "flex", gap: 7, marginTop: 8 } },
-                React.createElement("button", { style: { ...btnSec, flex: 1 }, onClick: () => Sync.entrarEmail(email, senha, false) }, "Entrar"),
-                React.createElement("button", { style: { ...btnSec, flex: 1 }, onClick: () => Sync.entrarEmail(email, senha, true) }, "Criar conta")),
-            React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 9, lineHeight: 1.5 } }, "Use a mesma conta nos dois aparelhos. O login precisa de internet s\u00F3 na primeira vez."))),
+                React.createElement("button", { style: { ...BOTAO2, flex: 1 }, onClick: () => Sync.entrarEmail(email, senha, false) }, "Entrar"),
+                React.createElement("button", { style: { ...BOTAO2, flex: 1 }, onClick: () => Sync.entrarEmail(email, senha, true) }, "Criar conta")),
+            React.createElement("div", { style: nota(9) }, "Use a mesma conta nos dois aparelhos. O login precisa de internet s\u00F3 na primeira vez."))),
         sync.erro && React.createElement("div", { style: { fontSize: 12.5, color: C.red, marginTop: 10, lineHeight: 1.5 } }, sync.erro)));
 }
-function PainelVersao({ btnSec }) {
+function PainelVersao() {
     const tem = useAtualizacao();
     const [info, setInfo] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -1597,11 +1819,11 @@ function PainelVersao({ btnSec }) {
         setInfo(r ? r : { erro: true });
         setBusy(false);
     };
-    return (React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
+    return (React.createElement("div", { style: CARTAO },
         React.createElement("div", { style: { fontSize: 13 } },
             "Vers\u00E3o instalada: ",
             APP_VERSION),
-        tem ? (React.createElement("button", { style: { ...btnSec, marginTop: 11, width: "100%", background: C.teal, color: C.base, border: "none" }, onClick: () => Atualizador.aplicar() }, "Instalar nova vers\u00E3o")) : (React.createElement("button", { style: { ...btnSec, marginTop: 11, width: "100%" }, onClick: verificar, disabled: busy }, busy ? "Verificando…" : "Verificar atualização")),
+        tem ? (React.createElement("button", { style: { ...BOTAO2, marginTop: 11, width: "100%", background: C.teal, color: C.base, border: "none" }, onClick: () => Atualizador.aplicar() }, "Instalar nova vers\u00E3o")) : (React.createElement("button", { style: { ...BOTAO2, marginTop: 11, width: "100%" }, onClick: verificar, disabled: busy }, busy ? "Verificando…" : "Verificar atualização")),
         info && !info.erro && (React.createElement("div", { style: { fontSize: 12.5, color: C.ink2, marginTop: 9, lineHeight: 1.5 } },
             "Vers\u00E3o publicada: ",
             info.versao,
@@ -1610,9 +1832,9 @@ function PainelVersao({ btnSec }) {
                 React.createElement("br", null),
                 info.notas))),
         info && info.erro && React.createElement("div", { style: { fontSize: 12.5, color: C.amber, marginTop: 9 } }, "Sem conex\u00E3o para verificar agora."),
-        React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 9, lineHeight: 1.5 } }, "O app tamb\u00E9m verifica sozinho ao abrir e a cada hora. Seu progresso n\u00E3o \u00E9 afetado pelas atualiza\u00E7\u00F5es.")));
+        React.createElement("div", { style: nota(9) }, "O app tamb\u00E9m verifica sozinho ao abrir e a cada hora. Seu progresso n\u00E3o \u00E9 afetado pelas atualiza\u00E7\u00F5es.")));
 }
-function PainelAnki({ cfg, setCfg, blocos, lerAnki, ankiMsg, inp, btn, btnSec }) {
+function PainelAnki({ cfg, setCfg, blocos, lerAnki, ankiMsg }) {
     const [loc, setLoc] = useState(ankiLocal());
     const [msg, setMsg] = useState("");
     const [busy, setBusy] = useState(false);
@@ -1656,24 +1878,21 @@ function PainelAnki({ cfg, setCfg, blocos, lerAnki, ankiMsg, inp, btn, btnSec })
     blocos.forEach((b) => { var _a; return (porSemana[_a = b.semana] || (porSemana[_a] = [])).push(b); });
     const chip = { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, padding: "3px 4px 3px 8px",
         border: `1px solid ${C.line}`, color: C.card, margin: "4px 5px 0 0", maxWidth: "100%" };
-    return (React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
-        React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 9, fontSize: 13, cursor: "pointer" } },
-            React.createElement("input", { type: "checkbox", checked: loc.ativo, onChange: (e) => atualizarLoc({ ativo: e.target.checked }), style: { accentColor: C.card, width: 17, height: 17 } }),
-            "Ler do Anki neste aparelho"),
-        React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 7, lineHeight: 1.5 } }, "Ative s\u00F3 no computador com o Anki e o AnkiConnect instalados. No celular, deixe desligado: as contagens lidas no computador chegam pela sincroniza\u00E7\u00E3o."),
+    return (React.createElement("div", { style: CARTAO },
+        React.createElement(Opcao, { marcada: loc.ativo, aoMudar: (v) => atualizarLoc({ ativo: v }), cor: C.card }, "Ler do Anki neste aparelho"),
+        React.createElement("div", { style: nota(7) }, "Ative s\u00F3 no computador com o Anki e o AnkiConnect instalados. No celular, deixe desligado: as contagens lidas no computador chegam pela sincroniza\u00E7\u00E3o."),
         loc.ativo && (React.createElement(React.Fragment, null,
-            React.createElement("label", { style: { fontSize: 12, color: C.ink2, display: "block", marginTop: 11 } }, "Endere\u00E7o do AnkiConnect"),
-            React.createElement("input", { style: { ...inp, marginTop: 4 }, value: loc.url, onChange: (e) => atualizarLoc({ url: e.target.value.trim() }) }),
+            React.createElement("label", { style: { ...rotulo, marginTop: 11 } }, "Endere\u00E7o do AnkiConnect"),
+            React.createElement("input", { style: { ...CAMPO, marginTop: 4 }, value: loc.url, onChange: (e) => atualizarLoc({ url: e.target.value.trim() }) }),
             React.createElement("div", { style: { display: "flex", gap: 7, marginTop: 9, flexWrap: "wrap" } },
-                React.createElement("button", { style: { ...btnSec, flex: 1 }, disabled: busy, onClick: buscarBaralhos }, busy ? "Conectando…" : "Testar conexão"),
-                React.createElement("button", { style: { ...btn, flex: 1 }, disabled: busy, onClick: associar }, "Associar baralhos")),
-            React.createElement("button", { style: { ...btnSec, marginTop: 7, width: "100%" }, onClick: () => lerAnki() }, "Ler contagens agora"))),
+                React.createElement("button", { style: { ...BOTAO2, flex: 1 }, disabled: busy, onClick: buscarBaralhos }, busy ? "Conectando…" : "Testar conexão"),
+                React.createElement("button", { style: { ...BOTAO, flex: 1 }, disabled: busy, onClick: associar }, "Associar baralhos")),
+            React.createElement("button", { style: { ...BOTAO2, marginTop: 7, width: "100%" }, onClick: () => lerAnki() }, "Ler contagens agora"))),
         msg && React.createElement("div", { style: { fontSize: 12.5, color: C.teal, marginTop: 9, lineHeight: 1.5 } }, msg),
         loc.ativo && ankiMsg && React.createElement("div", { style: { fontSize: 12.5, color: C.ink2, marginTop: 6, lineHeight: 1.5 } }, ankiMsg),
-        React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 9, marginTop: 13, fontSize: 13, cursor: "pointer" } },
-            React.createElement("input", { type: "checkbox", checked: cfg.ankiAuto, onChange: (e) => setCfg({ ...cfg, ankiAuto: e.target.checked }), style: { accentColor: C.card, width: 17, height: 17 } }),
-            "Marcar a revis\u00E3o sozinho quando o baralho zerar"),
-        React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 7, lineHeight: 1.5 } }, "A revis\u00E3o de flashcards \u00E9 marcada quando o baralho do tema n\u00E3o tem mais cart\u00F5es vencidos e voc\u00EA revisou pelo menos um cart\u00E3o dele desde s\u00E1bado."),
+        React.createElement("div", { style: { marginTop: 13 } },
+            React.createElement(Opcao, { marcada: cfg.ankiAuto, aoMudar: (v) => setCfg({ ...cfg, ankiAuto: v }), cor: C.card }, "Marcar a revis\u00E3o sozinho quando o baralho zerar")),
+        React.createElement("div", { style: nota(7) }, "A revis\u00E3o de flashcards \u00E9 marcada quando o baralho do tema n\u00E3o tem mais cart\u00F5es vencidos e voc\u00EA revisou pelo menos um cart\u00E3o dele desde s\u00E1bado."),
         React.createElement("button", { onClick: () => setVerMapa(!verMapa), style: { border: "none", background: "none", color: C.teal, fontSize: 13,
                 cursor: "pointer", padding: 0, marginTop: 12, textDecoration: "underline" } }, verMapa ? "Ocultar associações" : `Ver associações (${nAssoc} de ${blocos.length} aulas)`),
         verMapa && (React.createElement("div", { style: { marginTop: 8 } },
@@ -1688,7 +1907,7 @@ function PainelAnki({ cfg, setCfg, blocos, lerAnki, ankiMsg, inp, btn, btnSec })
                         React.createElement("div", null, decks.map((d) => (React.createElement("span", { key: d, style: chip },
                             React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, d.split("::").pop()),
                             React.createElement("button", { "aria-label": "Remover baralho", onClick: () => setMapa({ ...mapa, [b.id]: decks.filter((x) => x !== d) }), style: { border: "none", background: "none", color: C.ink2, cursor: "pointer", padding: "0 3px", fontSize: 12 } }, "\u2715"))))),
-                        loc.baralhos.length > 0 && (React.createElement("select", { value: "", onChange: (e) => e.target.value && setMapa({ ...mapa, [b.id]: [...decks, e.target.value] }), style: { ...inp, fontSize: 12.5, padding: "5px 6px", marginTop: 5 } },
+                        loc.baralhos.length > 0 && (React.createElement("select", { value: "", onChange: (e) => e.target.value && setMapa({ ...mapa, [b.id]: [...decks, e.target.value] }), style: { ...CAMPO, fontSize: 12.5, padding: "5px 6px", marginTop: 5 } },
                             React.createElement("option", { value: "" }, "+ adicionar baralho"),
                             loc.baralhos.filter((d) => !decks.includes(d)).map((d) => (React.createElement("option", { key: d, value: d },
                                 usados.has(d) ? "• " : "",
@@ -1705,20 +1924,17 @@ function PainelAnki({ cfg, setCfg, blocos, lerAnki, ankiMsg, inp, btn, btnSec })
             })(),
             React.createElement("div", { style: { fontSize: 11.5, color: C.ink2, marginTop: 8, lineHeight: 1.5 } }, "Aulas em amarelo est\u00E3o sem baralho. Na lista de adicionar, \"\u2022\" indica baralho j\u00E1 usado em outra aula. Um mesmo baralho pode servir a duas aulas (ex.: Trauma I e II).")))));
 }
-function Dados({ cfg, setCfg, blocos, setBlocos, bonus, setBonus, registro, setRegistro, adiados, setAdiados, setExcluidos, excluidos, plano, hoje, sync, anki, setAnki, lerAnki, ankiMsg }) {
+function Dados({ estado, aplicarEstado, setCfg, setBlocos, setAdiados, plano, hoje, sync, lerAnki, ankiMsg }) {
+    const { cfg, blocos, bonus, registro, adiados, excluidos, anki, bonusAdiado } = estado;
     const [saida, setSaida] = useState("");
     const [nome, setNome] = useState("");
     const [texto, setTexto] = useState("");
     const [msg, setMsg] = useState("");
-    const inp = { width: "100%", padding: "9px 10px", border: `1px solid ${C.line}`, fontSize: 15, fontFamily: SANS,
-        background: C.base, color: C.ink, colorScheme: "dark", boxSizing: "border-box" };
-    const btn = { background: C.teal, color: C.base, border: "none", padding: "10px 14px", fontSize: 13.5, cursor: "pointer", fontFamily: SANS };
-    const btnSec = { ...btn, background: "transparent", color: C.teal, border: `1px solid ${C.teal}` };
     const exportar = (tipo) => {
         let out = "", n = "";
         if (tipo === "backup") {
             n = "estudos-backup.json";
-            out = JSON.stringify({ versao: 9, exportadoEm: hoje, cfg, blocos, bonus, registro, adiados, excluidos, anki }, null, 2);
+            out = JSON.stringify({ versao: 9, exportadoEm: hoje, cfg, blocos, bonus, registro, adiados, excluidos, anki, bonusAdiado }, null, 2);
         }
         else if (tipo === "historico") {
             n = "cumprimento-semanal.csv";
@@ -1752,14 +1968,13 @@ function Dados({ cfg, setCfg, blocos, setBlocos, bonus, setBonus, registro, setR
     };
     return (React.createElement("div", null,
         React.createElement(SecaoTitulo, { texto: "Sincroniza\u00E7\u00E3o" }),
-        React.createElement(PainelSync, { sync: sync, inp: inp, btn: btn, btnSec: btnSec }),
+        React.createElement(PainelSync, { sync: sync }),
         React.createElement(SecaoTitulo, { texto: "Vers\u00E3o e atualiza\u00E7\u00F5es" }),
-        React.createElement(PainelVersao, { btnSec: btnSec }),
+        React.createElement(PainelVersao, null),
         React.createElement(SecaoTitulo, { texto: "Anki" }),
-        React.createElement(PainelAnki, { cfg: cfg, setCfg: setCfg, blocos: blocos, lerAnki: lerAnki, ankiMsg: ankiMsg, inp: inp, btn: btn, btnSec: btnSec }),
-        React.createElement(SecaoTitulo, { texto: "Capacidade semanal" }),
-        React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
-            React.createElement("input", { type: "range", min: "10", max: "60", step: "1", value: cfg.pontosSemana, style: { width: "100%", accentColor: C.teal }, onChange: (e) => setCfg({ ...cfg, pontosSemana: Number(e.target.value) }) }),
+        React.createElement(PainelAnki, { cfg: cfg, setCfg: setCfg, blocos: blocos, lerAnki: lerAnki, ankiMsg: ankiMsg }),
+        React.createElement(Secao, { titulo: "Capacidade semanal" },
+            React.createElement(Faixa, { cfg: cfg, setCfg: setCfg, chave: "pontosSemana", min: "10", max: "60", passo: "1" }),
             React.createElement("div", { style: { fontSize: 13, marginTop: 6 } },
                 cfg.pontosSemana,
                 " pontos por semana"),
@@ -1767,16 +1982,15 @@ function Dados({ cfg, setCfg, blocos, setBlocos, bonus, setBonus, registro, setR
                 "Aula 5 \u00B7 aula b\u00F4nus 3 \u00B7 quest\u00F5es 2 \u00B7 revis\u00E3o 1.",
                 React.createElement("br", null),
                 "Uma semana t\u00EDpica do extensivo custa cerca de 10 pontos s\u00F3 de aulas novas.")),
-        React.createElement(SecaoTitulo, { texto: "Horizonte do planejamento" }),
-        React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
-            React.createElement("label", { style: { fontSize: 12.5, color: C.ink2 } }, "\u00DAltima aula do extensivo"),
-            React.createElement("input", { style: { ...inp, marginTop: 5, marginBottom: 12 }, type: "date", value: cfg.fimCronograma, onChange: (e) => setCfg({ ...cfg, fimCronograma: e.target.value }) }),
-            React.createElement("label", { style: { fontSize: 12.5, color: C.ink2 } }, "Fim do planejamento em carga cheia"),
-            React.createElement("input", { style: { ...inp, marginTop: 5, marginBottom: 12 }, type: "date", value: cfg.fimPrimario, onChange: (e) => setCfg({ ...cfg, fimPrimario: e.target.value }) }),
-            React.createElement("label", { style: { fontSize: 12.5, color: C.ink2 } }, "Fim do per\u00EDodo de carga reduzida"),
-            React.createElement("input", { style: { ...inp, marginTop: 5 }, type: "date", value: cfg.fimReduzido, onChange: (e) => setCfg({ ...cfg, fimReduzido: e.target.value }) }),
+        React.createElement(Secao, { titulo: "Horizonte do planejamento" },
+            React.createElement("label", { style: rotulo }, "\u00DAltima aula do extensivo"),
+            React.createElement("input", { style: { ...CAMPO, marginTop: 5, marginBottom: 12 }, type: "date", value: cfg.fimCronograma, onChange: (e) => setCfg({ ...cfg, fimCronograma: e.target.value }) }),
+            React.createElement("label", { style: rotulo }, "Fim do planejamento em carga cheia"),
+            React.createElement("input", { style: { ...CAMPO, marginTop: 5, marginBottom: 12 }, type: "date", value: cfg.fimPrimario, onChange: (e) => setCfg({ ...cfg, fimPrimario: e.target.value }) }),
+            React.createElement("label", { style: rotulo }, "Fim do per\u00EDodo de carga reduzida"),
+            React.createElement("input", { style: { ...CAMPO, marginTop: 5 }, type: "date", value: cfg.fimReduzido, onChange: (e) => setCfg({ ...cfg, fimReduzido: e.target.value }) }),
             React.createElement("div", { style: { marginTop: 12 } },
-                React.createElement("input", { type: "range", min: "0.33", max: "0.7", step: "0.01", value: cfg.reducao, style: { width: "100%", accentColor: C.teal }, onChange: (e) => setCfg({ ...cfg, reducao: Number(e.target.value) }) }),
+                React.createElement(Faixa, { cfg: cfg, setCfg: setCfg, chave: "reducao", min: "0.33", max: "0.7", passo: "0.01" }),
                 React.createElement("div", { style: { fontSize: 12.5, color: C.ink2, marginTop: 6, lineHeight: 1.5 } },
                     "Redu\u00E7\u00E3o de ",
                     Math.round(cfg.reducao * 100),
@@ -1788,15 +2002,14 @@ function Dados({ cfg, setCfg, blocos, setBlocos, bonus, setBonus, registro, setR
                     " ",
                     Math.round(cfg.pontosSemana * (1 - cfg.reducao)),
                     " pontos por semana. O m\u00EDnimo permitido \u00E9 33%."))),
-        React.createElement(SecaoTitulo, { texto: "Redistribui\u00E7\u00E3o de metas" }),
-        React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
-            React.createElement("input", { type: "range", min: "1", max: "6", step: "1", value: cfg.janelaRedistribuicao, style: { width: "100%", accentColor: C.teal }, onChange: (e) => setCfg({ ...cfg, janelaRedistribuicao: Number(e.target.value) }) }),
+        React.createElement(Secao, { titulo: "Redistribui\u00E7\u00E3o de metas" },
+            React.createElement(Faixa, { cfg: cfg, setCfg: setCfg, chave: "janelaRedistribuicao", min: "1", max: "6", passo: "1" }),
             React.createElement("div", { style: { fontSize: 13, marginTop: 6 } },
                 "Espalhar por ",
                 cfg.janelaRedistribuicao,
                 " semanas"),
             React.createElement("div", { style: { marginTop: 12 } },
-                React.createElement("input", { type: "range", min: "0.1", max: "0.6", step: "0.05", value: cfg.tetoAdiado, style: { width: "100%", accentColor: C.teal }, onChange: (e) => setCfg({ ...cfg, tetoAdiado: Number(e.target.value) }) }),
+                React.createElement(Faixa, { cfg: cfg, setCfg: setCfg, chave: "tetoAdiado", min: "0.1", max: "0.6", passo: "0.05" }),
                 React.createElement("div", { style: { fontSize: 12.5, color: C.ink2, marginTop: 6, lineHeight: 1.5 } },
                     "Teto de ",
                     Math.round(cfg.tetoAdiado * 100),
@@ -1804,60 +2017,51 @@ function Dados({ cfg, setCfg, blocos, setBlocos, bonus, setBonus, registro, setR
                     Math.round(cfg.pontosSemana * cfg.tetoAdiado),
                     " pontos) para metas adiadas.")),
             React.createElement("div", { style: { marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 12 } },
-                React.createElement("input", { type: "range", min: "2", max: "12", step: "1", value: cfg.maxRevisoes, style: { width: "100%", accentColor: C.teal }, onChange: (e) => setCfg({ ...cfg, maxRevisoes: Number(e.target.value) }) }),
+                React.createElement(Faixa, { cfg: cfg, setCfg: setCfg, chave: "maxRevisoes", min: "2", max: "12", passo: "1" }),
                 React.createElement("div", { style: { fontSize: 12.5, color: C.ink2, marginTop: 6 } },
                     "M\u00E1ximo de ",
                     cfg.maxRevisoes,
                     " revis\u00F5es por semana"),
-                React.createElement("input", { type: "range", min: "1", max: "8", step: "1", value: cfg.maxBonus, style: { width: "100%", accentColor: C.teal, marginTop: 12 }, onChange: (e) => setCfg({ ...cfg, maxBonus: Number(e.target.value) }) }),
+                React.createElement(Faixa, { cfg: cfg, setCfg: setCfg, chave: "maxBonus", min: "1", max: "8", passo: "1", mt: 12 }),
                 React.createElement("div", { style: { fontSize: 12.5, color: C.ink2, marginTop: 6, lineHeight: 1.5 } },
                     "M\u00E1ximo de ",
                     cfg.maxBonus,
                     " aulas b\u00F4nus por semana. Os tetos valem al\u00E9m do limite de pontos e s\u00E3o reduzidos proporcionalmente nas semanas de carga menor.")),
-            React.createElement("button", { style: { ...btnSec, marginTop: 14, width: "100%", color: C.red, borderColor: C.red }, onClick: () => { setAdiados({}); setMsg("Contador de adiamentos zerado."); } }, "Zerar contador de adiamentos")),
-        React.createElement(SecaoTitulo, { texto: "Aulas b\u00F4nus" }),
-        React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
-            React.createElement("input", { type: "range", min: "1", max: "12", step: "1", value: cfg.semanasAdiamentoBonus, style: { width: "100%", accentColor: C.star }, onChange: (e) => setCfg({ ...cfg, semanasAdiamentoBonus: Number(e.target.value) }) }),
+            React.createElement("button", { style: { ...BOTAO2, marginTop: 14, width: "100%", color: C.red, borderColor: C.red }, onClick: () => { setAdiados({}); setMsg("Contador de adiamentos zerado."); } }, "Zerar contador de adiamentos")),
+        React.createElement(Secao, { titulo: "Aulas b\u00F4nus" },
+            React.createElement(Faixa, { cfg: cfg, setCfg: setCfg, chave: "semanasAdiamentoBonus", min: "1", max: "12", passo: "1", cor: C.star }),
             React.createElement("div", { style: { fontSize: 13, marginTop: 6 } },
                 "B\u00F4nus trocada volta \u00E0 fila depois de ",
                 cfg.semanasAdiamentoBonus,
                 " semanas"),
-            React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 7, lineHeight: 1.5 } }, "No come\u00E7o de cada semana o app pergunta se voc\u00EA quer trocar as b\u00F4nus sugeridas. As trocadas saem da semana e entram outras do mesmo n\u00EDvel de estrelas, enquanto houver.")),
-        React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
-            React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 9, fontSize: 13, cursor: "pointer" } },
-                React.createElement("input", { type: "checkbox", checked: cfg.incluirBaixaPrioridade, onChange: (e) => setCfg({ ...cfg, incluirBaixaPrioridade: e.target.checked }), style: { accentColor: C.card, width: 17, height: 17 } }),
-                "Incluir b\u00F4nus de at\u00E9 uma estrela na agenda"),
+            React.createElement("div", { style: nota(7) }, "No come\u00E7o de cada semana o app pergunta se voc\u00EA quer trocar as b\u00F4nus sugeridas. As trocadas saem da semana e entram outras do mesmo n\u00EDvel de estrelas, enquanto houver.")),
+        React.createElement("div", { style: CARTAO },
+            React.createElement(Opcao, { marcada: cfg.incluirBaixaPrioridade, aoMudar: (v) => setCfg({ ...cfg, incluirBaixaPrioridade: v }), cor: C.card }, "Incluir b\u00F4nus de at\u00E9 uma estrela na agenda"),
             React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 10, lineHeight: 1.55 } }, "Ligado, entram no fim da fila. Desligado, ficam dispon\u00EDveis s\u00F3 na aba B\u00F4nus.")),
-        React.createElement(SecaoTitulo, { texto: "Exportar e restaurar" }),
-        React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
+        React.createElement(Secao, { titulo: "Exportar e restaurar" },
             React.createElement("div", { style: { display: "flex", gap: 7, flexWrap: "wrap" } },
-                React.createElement("button", { style: btn, onClick: () => exportar("backup") }, "Backup completo"),
-                React.createElement("button", { style: btnSec, onClick: () => exportar("plano") }, "Plano semanal"),
-                React.createElement("button", { style: btnSec, onClick: () => exportar("historico") }, "Hist\u00F3rico")),
+                React.createElement("button", { style: BOTAO, onClick: () => exportar("backup") }, "Backup completo"),
+                React.createElement("button", { style: BOTAO2, onClick: () => exportar("plano") }, "Plano semanal"),
+                React.createElement("button", { style: BOTAO2, onClick: () => exportar("historico") }, "Hist\u00F3rico")),
             saida && (React.createElement("div", { style: { marginTop: 11 } },
                 React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } },
                     React.createElement("span", { style: { fontSize: 12, color: C.ink2 } }, nome),
-                    React.createElement("button", { style: { ...btnSec, padding: "6px 12px", fontSize: 12.5 }, onClick: async () => { try {
+                    React.createElement("button", { style: { ...BOTAO2, padding: "6px 12px", fontSize: 12.5 }, onClick: async () => { try {
                             await navigator.clipboard.writeText(saida);
                             setMsg("Copiado.");
                         }
                         catch {
                             setMsg("Selecione e copie.");
                         } } }, "Copiar")),
-                React.createElement("textarea", { readOnly: true, rows: 6, value: saida, onClick: (e) => e.target.select(), style: { ...inp, fontFamily: "monospace", fontSize: 11.5 } }))),
-            React.createElement("textarea", { rows: 3, style: { ...inp, marginTop: 11, fontFamily: "monospace", fontSize: 12.5 }, placeholder: "Cole o JSON do backup", value: texto, onChange: (e) => setTexto(e.target.value) }),
-            React.createElement("button", { style: { ...btnSec, marginTop: 8, width: "100%" }, onClick: () => {
+                React.createElement("textarea", { readOnly: true, rows: 6, value: saida, onClick: (e) => e.target.select(), style: { ...CAMPO, fontFamily: "monospace", fontSize: 11.5 } }))),
+            React.createElement("textarea", { rows: 3, style: { ...CAMPO, marginTop: 11, fontFamily: "monospace", fontSize: 12.5 }, placeholder: "Cole o JSON do backup", value: texto, onChange: (e) => setTexto(e.target.value) }),
+            React.createElement("button", { style: { ...BOTAO2, marginTop: 8, width: "100%" }, onClick: () => {
                     try {
                         const d = JSON.parse(texto);
                         if (!d.blocos)
                             throw new Error();
-                        setBlocos(d.blocos);
-                        setBonus(d.bonus || bonus);
-                        setRegistro(d.registro || {});
-                        setAdiados(d.adiados || {});
-                        setExcluidos(d.excluidos || {});
-                        setAnki(d.anki || {});
-                        setCfg({ ...DEFAULT_CFG, ...(d.cfg || {}) });
+                        aplicarEstado({ cfg: { ...DEFAULT_CFG, ...(d.cfg || {}) }, blocos: d.blocos, bonus: d.bonus || bonus,
+                            registro: d.registro || {}, adiados: d.adiados || {}, excluidos: d.excluidos || {}, anki: d.anki, bonusAdiado: d.bonusAdiado });
                         setMsg("Backup restaurado.");
                         setTexto("");
                     }
@@ -1866,15 +2070,30 @@ function Dados({ cfg, setCfg, blocos, setBlocos, bonus, setBonus, registro, setR
                     }
                 } }, "Restaurar backup"),
             msg && React.createElement("div", { style: { fontSize: 12.5, color: C.teal, marginTop: 9 } }, msg)),
-        React.createElement(SecaoTitulo, { texto: "Semana atual e prova" }),
-        React.createElement("div", { style: { background: C.surface, padding: 13, marginBottom: 12 } },
-            React.createElement("input", { style: inp, type: "number", min: "1", max: "46", value: cfg.semanaAtual, onChange: (e) => setCfg({ ...cfg, semanaAtual: Number(e.target.value) || 1, semanaBaseSeg: sabado(hoje) }) }),
-            React.createElement("div", { style: { fontSize: 12, color: C.ink2, marginTop: 7, lineHeight: 1.5 } }, "A semana avan\u00E7a sozinha todo s\u00E1bado. Ajuste aqui s\u00F3 se o extensivo pausar ou se voc\u00EA quiser pular."),
-            React.createElement("button", { style: { ...btnSec, marginTop: 9, width: "100%" }, onClick: () => { setBlocos(seed(cfg, hoje)); setMsg("Estado recalculado."); } }, "Recalcular estado das semanas"),
-            React.createElement("input", { style: { ...inp, marginTop: 13 }, value: cfg.nomeProva, onChange: (e) => setCfg({ ...cfg, nomeProva: e.target.value }) }),
-            React.createElement("input", { style: { ...inp, marginTop: 8 }, type: "date", value: cfg.dataProva, onChange: (e) => setCfg({ ...cfg, dataProva: e.target.value, provisorio: false }) }),
+        React.createElement(Secao, { titulo: "Semana atual e prova" },
+            React.createElement("input", { style: CAMPO, type: "number", min: "1", max: "46", value: cfg.semanaAtual, onChange: (e) => setCfg({ ...cfg, semanaAtual: Number(e.target.value) || 1, semanaBaseSeg: sabado(hoje) }) }),
+            React.createElement("div", { style: nota(7) }, "A semana avan\u00E7a sozinha todo s\u00E1bado. Ajuste aqui s\u00F3 se o extensivo pausar ou se voc\u00EA quiser pular."),
+            React.createElement("button", { style: { ...BOTAO2, marginTop: 9, width: "100%" }, onClick: () => { setBlocos(seed(cfg, hoje)); setMsg("Estado recalculado."); } }, "Recalcular estado das semanas"),
+            React.createElement("input", { style: { ...CAMPO, marginTop: 13 }, value: cfg.nomeProva, onChange: (e) => setCfg({ ...cfg, nomeProva: e.target.value }) }),
+            React.createElement("input", { style: { ...CAMPO, marginTop: 8 }, type: "date", value: cfg.dataProva, onChange: (e) => setCfg({ ...cfg, dataProva: e.target.value, provisorio: false }) }),
             cfg.provisorio && React.createElement("div", { style: { fontSize: 12.5, color: C.amber, marginTop: 8, lineHeight: 1.45 } }, "Data provis\u00F3ria; editais de 2027 ainda n\u00E3o publicados."))));
 }
+/* ---------- peças de interface reaproveitadas ---------- */
+const CARTAO = { background: C.surface, padding: 13, marginBottom: 12 };
+const CAMPO = { width: "100%", padding: "9px 10px", border: `1px solid ${C.line}`, fontSize: 15, fontFamily: SANS,
+    background: C.base, color: C.ink, colorScheme: "dark", boxSizing: "border-box" };
+const BOTAO = { background: C.teal, color: C.base, border: "none", padding: "10px 14px", fontSize: 13.5, cursor: "pointer", fontFamily: SANS };
+const BOTAO2 = { ...BOTAO, background: "transparent", color: C.teal, border: `1px solid ${C.teal}` };
+const nota = (mt = 7, cor = C.ink2) => ({ fontSize: 12, color: cor, marginTop: mt, lineHeight: 1.5 });
+const rotulo = { fontSize: 12.5, color: C.ink2, display: "block" };
+const Secao = ({ titulo, cor, children }) => (React.createElement(React.Fragment, null,
+    React.createElement(SecaoTitulo, { texto: titulo, cor: cor }),
+    React.createElement("div", { style: CARTAO }, children)));
+const Opcao = ({ marcada, aoMudar, cor = C.card, children }) => (React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 9, fontSize: 13, cursor: "pointer" } },
+    React.createElement("input", { type: "checkbox", checked: marcada, onChange: (e) => aoMudar(e.target.checked), style: { accentColor: cor, width: 17, height: 17, flexShrink: 0 } }),
+    children));
+const Faixa = ({ cfg, setCfg, chave, min, max, passo = 1, cor = C.teal, mt }) => (React.createElement("input", { type: "range", min: min, max: max, step: passo, value: cfg[chave], style: { width: "100%", accentColor: cor, ...(mt ? { marginTop: mt } : {}) }, onChange: (e) => setCfg({ ...cfg, [chave]: Number(e.target.value) }) }));
+const Aviso = ({ cor = C.amber, fundo = C.amberSoft, children }) => (React.createElement("div", { style: { background: fundo, borderLeft: `3px solid ${cor}`, padding: "11px 12px", fontSize: 12.5, lineHeight: 1.5 } }, children));
 /* ---------- primitivos ---------- */
 const SecaoTitulo = ({ texto, cor }) => (React.createElement("h2", { style: { fontSize: 13, fontWeight: 600, color: cor || C.ink2, margin: "18px 0 9px" } }, texto));
 const Vazio = ({ texto }) => (React.createElement("div", { style: { background: C.surface, padding: "16px 13px", fontSize: 13.5, color: C.ink2, lineHeight: 1.5, borderLeft: `3px solid ${C.line}` } }, texto));

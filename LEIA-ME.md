@@ -120,12 +120,24 @@ O app avança sozinho a semana do Medcurso a cada sábado, junto com a virada da
 Em **Dados → Semana atual e prova** dá para corrigir à mão, por exemplo se o extensivo pausar ou se você quiser
 pular semanas; a partir daí a contagem automática segue do valor que você deixou.
 
+## Fechamento da semana
+
+Na primeira abertura depois da virada (sábado), o app mostra o que estava planejado para a semana que fechou
+e ficou sem marcar. Marque o que você fez e esqueceu de registrar (há "marcar todas" em cada grupo) e toque em
+**Registrar**: esses itens contam para a semana anterior, saem das metas redistribuídas e avançam na escada com a
+data do fim daquela semana. **Nada a acrescentar** encerra sem mudar nada; **Agora não** adia o painel para a
+próxima abertura. A resposta vale para todos os aparelhos sincronizados.
+
 ## Prioridade das aulas da semana
 
 As aulas programadas para a semana do extensivo entram sempre na sua própria semana e reservam os pontos delas
 antes de tudo. Depois entram as revisões e as questões já vencidas, e só então as questões das aulas novas, que
-nunca aparecem antes da semana da própria aula. Questões, revisões, bônus e pendências ocupam apenas o que sobra da capacidade e escorrem para as
-semanas seguintes quando não cabem. Se as duas aulas da semana sozinhas passarem da capacidade configurada, o app
+nunca aparecem antes da semana da própria aula — mesmo que você assista a aula antes. Questões, revisões, bônus e pendências ocupam apenas o que sobra da capacidade e escorrem para as
+semanas seguintes quando não cabem. O que você já cumpriu na semana continua contando na capacidade dela: terminar
+cedo não puxa mais metas para a mesma semana.
+
+As revisões seguem os marcos do Medcurso contados a partir da aula (1 semana, 1 mês, 2, 4 e 6 meses depois dela).
+Se uma etapa foi feita com atraso, a seguinte espera ao menos uma semana depois dela. Se as duas aulas da semana sozinhas passarem da capacidade configurada, o app
 avisa no topo do checklist e sugere aumentar a capacidade em **Dados → Capacidade semanal**.
 
 ## Troca das aulas bônus
@@ -147,7 +159,9 @@ No primeiro acesso de cada semana, se houver aulas bônus na agenda, o app pergu
 3. Nos aparelhos, com internet, o app verifica sozinho ao abrir e a cada hora. Quando encontra a versão nova,
    baixa em segundo plano e mostra **"Nova versão disponível · Atualizar"**. Tocando em *Atualizar*, recarrega em
    cerca de um segundo. Se você ignorar o aviso, a versão nova entra na próxima vez que o app for fechado e aberto.
-4. Sem internet não há verificação: a versão instalada continua funcionando normalmente.
+4. Atualize **todos os aparelhos** logo depois de publicar: versões diferentes abertas ao mesmo tempo podem
+   discordar sobre o checklist da semana (o app detecta e para de disputar, mas o ideal é deixar todos iguais).
+5. Sem internet não há verificação: a versão instalada continua funcionando normalmente.
 
 O progresso não é afetado: ele fica guardado no aparelho e no Firebase, separado do código.
 Em **Dados → Versão e atualizações** você vê a versão instalada e pode verificar manualmente.
