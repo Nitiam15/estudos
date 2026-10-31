@@ -1,5 +1,5 @@
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
-const APP_VERSION = "1.6.1";
+const APP_VERSION = "1.7.0";
 
 /* ============================================================
    PLANEJAMENTO DE ESTUDOS — residência 2027
@@ -9,15 +9,21 @@ const APP_VERSION = "1.6.1";
    aula 5 · bônus 3 · questões 2 · revisão (flashcards) 1
    ============================================================ */
 
+// Tema no estilo do Claude em modo noturno: cinzas quentes, texto marfim e acento coral/terracota
+// (todas as cores de texto passam no contraste mínimo WCAG AA de 4,5:1 sobre os fundos usados)
 const C = {
-  base: "#0F151B", surface: "#1A232C", ink: "#E7EDF2", ink2: "#8FA0AE",
-  line: "#2E3A45", teal: "#58B3AC", tealSoft: "#16302E", tealClaro: "#7FC4BE",
-  red: "#E0796A", redSoft: "#331F1C", amber: "#D9A83E", amberSoft: "#332A18",
-  star: "#D6A83C", card: "#6AA3D8", noite: "#202B36", pend: "#3B4956", falta: "#8C3A31",
+  base: "#262624", noite: "#1F1E1D", surface: "#30302E", line: "#45443F",
+  ink: "#FAF9F5", ink2: "#B0AEA5", ink3: "#9C9A92",
+  acento: "#E08566", acentoSuave: "#3A2A22",
+  ok: "#9DBF8E", rev: "#8DBFB3", card: "#8FAFD8", star: "#E2B35C",
+  amber: "#D9A04E", amberSoft: "#3A3122", red: "#F28B82",
+  falta: "#9E3F37", contorno: "#85837A",   // gráfico: não cumprido (sólido) e contorno das barras
+  veu: "rgba(15,15,14,0.74)",
 };
-const SANS = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
-const SERIF = "'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif";
-const AREAS = { "CLÍNICA": "#4FB3AB", "CIRURGIA": "#6AA3D8", "PEDIATRIA": "#D97BA0", "GO": "#A78BD0", "PREVENTIVA": "#83BC6C" };
+// fontes: serifa para títulos e conteúdo (como a do Claude; Georgia é a alternativa livre), sans para a interface
+const SANS = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+const SERIF = "Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Times New Roman', serif";
+const AREAS = { "CLÍNICA": "#CDBFA8", "CIRURGIA": "#86A9CF", "PEDIATRIA": "#D490AE", "GO": "#A992D4", "PREVENTIVA": "#93BC80" };
 const areaColor = (a) => AREAS[a] || C.ink2;
 
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -271,7 +277,8 @@ function vencimento(b, e, hoje) {
 }
 
 // jaFeito: pontos e quantidades já cumpridos na semana atual, que continuam ocupando a capacidade dela
-function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdiado = {}, jaFeito = null) {
+// manter: assuntos que você escolheu manter na semana atual (entram nela logo depois das aulas da semana)
+function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdiado = {}, jaFeito = null, manter = null) {
   const seg0 = sabado(hoje);
   const nAdi = (id) => adiados[id] || 0;
 
@@ -284,7 +291,7 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
       // a aula e as suas questões entram juntas na mesma semana
       aulas.push(mk(b, 0, { tipo: "aula", peso: PESO.aula, ordem: Number(b.semana), questoes: 0,
         atrasada: Number(b.semana) < cfg.semanaAtual,
-        par: mk(b, 1, { tipo: "questoes", peso: PESO.questoes, adiado: nAdi(b.id + ":1") }) }));
+        par: mk(b, 1, { tipo: "questoes", peso: PESO.questoes, adiado: nAdi(b.id + ":1"), comAula: true }) }));
     } else {
       const p = ESCADA[b.etapa];
       const venc = vencimento(b, b.etapa, hoje);
@@ -329,10 +336,10 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
   if (jaFeito) { s0.pontos = jaFeito.pontos; s0.nRev = jaFeito.nRev; s0.nBns = jaFeito.nBns; s0.feito = jaFeito.pontos; }
   const semanaDe = (data) => Math.max(0, Math.floor(diffDays(seg0, sabado(data)) / 7));
 
-  const colocar = (it, i, adi) => {
+  const colocar = (it, i, adi, fixavel = podeFixar(it)) => {
     const b = bucket(i);
     const { par, ...limpo } = it;
-    b.itens.push({ ...limpo, seg: b.seg });
+    b.itens.push({ ...limpo, seg: b.seg, fixavel, fixado: fixados.has(it.id) });
     b.pontos += it.peso; if (adi) b.pAdi += it.peso;
     if (it.tipo === "revisao") b.nRev++; if (it.tipo === "bonus") b.nBns++;
     return i;
@@ -341,10 +348,10 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
     // metas adiadas: até o teto da semana, mas sempre ao menos uma (uma aula de 5 pts nunca fica sem lugar)
     && (!adi || b.pAdi === 0 || b.pAdi + it.peso <= b.cap * cfg.tetoAdiado + 0.01)
     && (it.tipo !== "revisao" || b.nRev < b.maxRev) && (it.tipo !== "bonus" || b.nBns < b.maxBns);
-  const por = (it, iMin, adi) => {
+  const por = (it, iMin, adi, fixavel) => {
     let i = iMin;
     while (!cabe(bucket(i), it, adi) && i < iMin + 400) i++;
-    return colocar(it, i, adi);
+    return colocar(it, i, adi, fixavel);
   };
 
   const janela = Math.max(1, cfg.janelaRedistribuicao);
@@ -354,6 +361,13 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
     return ate ? Math.max(0, Math.ceil(diffDays(seg0, ate) / 7)) : 0; };
   const min0 = (it) => Math.max(fora.has(it.id) ? 1 : 0, voltaBonus(it),
     it.tipo === "questoes" && it.etapaItem === 1 ? alvoDaAula(it) : 0);
+  // pode ser mantido na semana atual: não é aula de semana futura (essas já têm semana), nem questões
+  // antes da aula, nem bônus que você trocou. Questões de uma aula ainda não vista dependem dela (ver pares).
+  const aulaDoPar = new Map(aulas.map((a) => [a.par.id, a]));
+  const podeFixar = (it) => !fora.has(it.id) && !(it.tipo === "aula" && idxSemana(it.semana) - baseIdx > 0)
+    && voltaBonus(it) === 0 && !(it.tipo === "questoes" && it.etapaItem === 1 && alvoDaAula(it) > 0)
+    && (!aulaDoPar.has(it.id) || podeFixar(aulaDoPar.get(it.id)));
+  const fixados = new Set();
 
   // A aula de uma semana do extensivo nunca sai da sua semana: entra primeiro e reserva os pontos dela.
   // Pendências e revisões é que escorrem para as semanas seguintes.
@@ -365,19 +379,32 @@ function construir(blocos, bonus, cfg, hoje, adiados, fora = new Set(), bonusAdi
   [...fAulas, ...adiada.filter((it) => it.tipo === "aula")].filter(naPropriaSemana)
     .forEach((a) => { const i = fixar(a, Math.max(min0(a), alvoDaAula(a))); if (a.par) pares.push([a.par, i]); });
 
+  // 1º-b) o que você escolheu manter nesta semana entra já, antes das demais pendências (mesmo acima dos limites)
+  // mantidos não entram na cota de metas adiadas: a sua escolha não tira da semana outras pendências da semana
+  // passada que já estavam nela; quem cede espaço é o que tem menos prioridade (bônus, questões ainda no prazo)
+  const fixaAgora = (it) => { fixados.add(it.id); return colocar(it, 0, false, true); };
+  if (manter && manter.size) {
+    // manter as questões de uma aula atrasada ainda não vista leva a aula junto (questões nunca vêm antes dela)
+    todos.filter((it) => (manter.has(it.id) || (it.par && manter.has(it.par.id))) && podeFixar(it)
+      && !(it.tipo === "aula" && naPropriaSemana(it)))
+      .forEach((it) => { fixaAgora(it); if (it.par) pares.push([it.par, 0]); });
+    pares.forEach(([q, iAula]) => { if (iAula === 0 && manter.has(q.id) && podeFixar(q)) fixaAgora(q); });
+  }
+  const livre = (it) => !fixados.has(it.id);
+
   // 2º) aulas atrasadas de semanas anteriores, que disputam espaço como as demais pendências
   [...adiada.filter((it) => it.tipo === "aula" && !naPropriaSemana(it)), ...fAulas.filter((a) => !naPropriaSemana(a))]
-    .forEach((a) => { const i = por(a, min0(a), !!a.adiado); if (a.par) pares.push([a.par, i]); });
+    .filter(livre).forEach((a) => { const i = por(a, min0(a), !!a.adiado); if (a.par) pares.push([a.par, i]); });
 
   // 3º) revisões e questões já vencidas vêm antes do que ainda nem foi visto
-  fRev.forEach((r) => por(r, Math.max(min0(r), r.venc <= hoje ? 0 : semanaDe(r.venc)), false));
-  fQuest.forEach((q) => por(q, Math.max(min0(q), q.venc <= hoje ? 0 : semanaDe(q.venc)), false));
+  fRev.filter(livre).forEach((r) => por(r, Math.max(min0(r), r.venc <= hoje ? 0 : semanaDe(r.venc)), false));
+  fQuest.filter(livre).forEach((q) => por(q, Math.max(min0(q), q.venc <= hoje ? 0 : semanaDe(q.venc)), false));
   adiada.filter((it) => it.tipo !== "aula")
-    .forEach((it, k) => por(it, Math.max(min0(it), k % janela), true));
+    .forEach((it, k) => { if (livre(it)) por(it, Math.max(min0(it), k % janela), true); });
 
   // 4º) as questões das aulas novas, a partir da semana em que a aula acontece
-  pares.forEach(([q, iAula]) => por(q, Math.max(min0(q), iAula), q.adiado > 0));
-  fBonus.forEach((b) => por(b, min0(b), false));
+  pares.filter(([q]) => livre(q)).forEach(([q, iAula]) => por(q, Math.max(min0(q), iAula), q.adiado > 0));
+  fBonus.filter(livre).forEach((b) => por(b, min0(b), false));
 
   const ordem = { aula: 0, questoes: 1, revisao: 2, bonus: 3 };
   semanas.forEach((s) => s.itens.sort((a, b) => b.adiado - a.adiado || ordem[a.tipo] - ordem[b.tipo]
@@ -423,6 +450,7 @@ function daNuvem(d) {
   Object.entries(d.registro || {}).forEach(([k, r]) => {
     registro[k] = { planejados: r.planejados || [], feitos: r.feitos || [], fechada: !!r.fechada, auto: r.auto || {}, manual: r.manual || {} };
     BANDEIRAS.forEach((f) => { if (r[f] !== undefined) registro[k][f] = r[f]; });
+    if (Array.isArray(r.manter)) registro[k].manter = r.manter;
   });
   return { cfg, blocos, bonus, registro, adiados: d.adiados || {}, excluidos: d.excluidos || {},
     anki: d.anki || {}, bonusAdiado: d.bonusAdiado || {} };
@@ -433,7 +461,7 @@ const estavel = (v) => v && typeof v === "object"
     : "{" + Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => JSON.stringify(k) + ":" + estavel(v[k])).join(",") + "}")
   : JSON.stringify(v === undefined ? null : v);
 const igual = (a, b) => estavel(a) === estavel(b);
-const BANDEIRAS = ["bonusPerguntado", "revisar"];   // marcas simples de cada semana do registro
+const BANDEIRAS = ["bonusPerguntado", "revisar", "manterPerguntado"];   // marcas simples de cada semana do registro
 
 // diferença entre dois estados em formato de nuvem -> patch para setDoc(merge)
 // devolve um patch, ou uma lista de patches quando um campo precisa de duas gravações (remover e acrescentar)
@@ -464,6 +492,8 @@ function diferenca(ant, nov, F) {
       if (Object.keys(sub).length) r[m] = sub;
     });
     BANDEIRAS.forEach((f) => { if (b[f] !== undefined && (!a || a[f] !== b[f])) r[f] = b[f]; });
+    // lista dos assuntos mantidos na semana: é uma escolha única, gravada inteira quando muda
+    if (!igual((a && a.manter) || [], b.manter || [])) r.manter = b.manter || [];
     if (!a) {
       r.planejados = b.planejados; r.fechada = b.fechada;
       if (b.feitos.length) r.feitos = F.arrayUnion(...b.feitos);
@@ -898,13 +928,14 @@ function App() {
     return { pontos: l.reduce((a, p) => a + (p.peso || 0), 0), nRev: l.filter((p) => p.tipo === "revisao").length,
       nBns: l.filter((p) => p.tipo === "bonus").length };
   }, [regAtual]);
-  const plano = useMemo(() => construir(blocos, bonus, cfg, hoje, adiados, fora, bonusAdiado, jaFeito),
-    [blocos, bonus, cfg, hoje, adiados, fora, bonusAdiado, jaFeito]);
+  const manterSet = useMemo(() => new Set((regAtual && regAtual.manter) || []), [regAtual]);
+  const plano = useMemo(() => construir(blocos, bonus, cfg, hoje, adiados, fora, bonusAdiado, jaFeito, manterSet),
+    [blocos, bonus, cfg, hoje, adiados, fora, bonusAdiado, jaFeito, manterSet]);
   const sem0 = plano.semanas[0];
 
   // O registro da semana acompanha o plano: entra o que passou a caber, sai o que não está mais na semana
   // (o que já foi feito fica). Só depois que a virada terminou de fechar semanas e avançar o extensivo.
-  const disputa = useRef({ ids: "", em: 0, ate: 0 });
+  const disputa = useRef({ ids: "", em: 0, ate: 0, n: 0 });
   const viradaPronta = !Object.keys(registro).some((k) => k < segAtual && !registro[k].fechada)
     && (!cfg.semanaBaseSeg || cfg.semanaBaseSeg >= segAtual);
   useEffect(() => {
@@ -913,14 +944,17 @@ function App() {
     if (!s) { setRegistro((r) => ({ ...r, [segAtual]: { planejados: sem0.itens.map(paraRegistro), feitos: [], fechada: false, auto: {}, manual: {} } })); return; }
     const feitos = new Set(s.feitos), noPlano = new Set(sem0.itens.map((i) => i.id));
     let manter = s.planejados.filter((p) => feitos.has(p.id) || noPlano.has(p.id));
-    // Um aparelho ainda na versão anterior devolve o que esta tira. Se as mesmas remoções voltarem em menos de
-    // um minuto, para de disputar por 10 minutos (evita gravações sem fim) até o outro aparelho atualizar.
+    // Um aparelho ainda na versão anterior devolve o que esta tira, sem parar. Só quando as mesmas remoções
+    // voltam 3 vezes em 2 minutos (uma volta isolada é só a nuvem chegando atrasada) o app para de disputar
+    // por 10 minutos, até o outro aparelho atualizar.
     const tirar = s.planejados.filter((p) => !manter.includes(p)).map((p) => p.id).sort().join();
     if (tirar) {
       const g = disputa.current, agora = Date.now();
       if (agora < g.ate) manter = s.planejados;
-      else if (tirar === g.ids && agora - g.em < 60000) { g.ate = agora + 10 * 60000; manter = s.planejados; }
-      else { g.ids = tirar; g.em = agora; }
+      else {
+        if (tirar === g.ids && agora - g.em < 120000) g.n++; else { g.ids = tirar; g.em = agora; g.n = 1; }
+        if (g.n > 3) { g.ate = agora + 10 * 60000; manter = s.planejados; }
+      }
     }
     const tem = new Set(manter.map((p) => p.id));
     const novas = sem0.itens.filter((i) => !tem.has(i.id)).map(paraRegistro);
@@ -958,6 +992,7 @@ function App() {
       const feitos = s.feitos.filter((x) => x !== entrada.id
         && !(et !== undefined && String(x).split(":")[0] === bid && Number(String(x).split(":")[1]) > Number(et)));
       const planejados = modo === "remover" ? s.planejados.filter((p) => p.id !== entrada.id) : s.planejados;
+      const manter = modo === "remover" && s.manter ? s.manter.filter((x) => x !== entrada.id) : s.manter;
       const auto = { ...(s.auto || {}) }, manual = { ...(s.manual || {}) };
       delete auto[entrada.id];
       if (entrada.tipo === "revisao") {
@@ -965,7 +1000,7 @@ function App() {
         const st = (atual.current.anki || {})[String(entrada.id).split(":")[0]];
         if (origem === "manual") manual[entrada.id] = { v: false, rev: st ? st.rev : 0 }; else delete manual[entrada.id];
       }
-      return { ...r, [segAtual]: { ...s, feitos, planejados, auto, manual } };
+      return { ...r, [segAtual]: { ...s, feitos, planejados, auto, manual, ...(manter ? { manter } : {}) } };
     });
     if (modo === "remover") setExcluidos((e) => ({ ...e, [segAtual]: [...(e[segAtual] || []), entrada.id] }));
     if (entrada.tipo === "bonus") setBonus((bs) => bs.map((x) => x.id === entrada.id ? { ...x, feito: false } : x));
@@ -1020,6 +1055,30 @@ function App() {
     if (pronto && pendentesDaVirada && !pendentesDaVirada.itens.length) fecharVirada(pendentesDaVirada.k, []);
   }, [pronto, pendentesDaVirada, fecharVirada]);
   const [viradaDepois, setViradaDepois] = useState(false);
+  useEffect(() => { setViradaDepois(false); }, [segAtual]);
+
+  // Escolha dos assuntos que ficam nesta semana (2ª etapa do painel da virada, ou aberta pelo checklist):
+  // o que sobrou da semana passada e foi para depois, e o que dá para adiantar das duas semanas seguintes.
+  const [manterAberto, setManterAberto] = useState(false);
+  const candidatosManter = useMemo(() => {
+    if (!regAtual) return { sobras: [], proximas: [], mantidos: [] };
+    const ant = Object.keys(registro).filter((k) => k < segAtual).sort().pop(), ra = ant && registro[ant];
+    const sobra = new Set(ra ? ra.planejados.filter((p) => !ra.feitos.includes(p.id)).map((p) => p.id) : []);
+    const sobras = [], proximas = [], mantidos = [];
+    plano.semanas.forEach((sm, i) => sm.itens.forEach((it) => {
+      if (it.fixado) { mantidos.push(it); return; }
+      if (i === 0 || !it.fixavel) return;
+      if (sobra.has(it.id)) sobras.push(it); else if (i <= 2) proximas.push(it);
+    }));
+    return { sobras, proximas, mantidos };
+  }, [plano, registro, segAtual, regAtual]);
+  const salvarManter = useCallback((ids) => {
+    setRegistro((r) => r[segAtual] ? { ...r, [segAtual]: { ...r[segAtual], manter: ids, manterPerguntado: true } } : r);
+    setManterAberto(false);
+  }, [segAtual]);
+  const passoVirada = !!(pendentesDaVirada && pendentesDaVirada.itens.length);
+  const perguntarManter = viradaPronta && !!regAtual && !regAtual.manterPerguntado
+    && candidatosManter.sobras.length + candidatosManter.proximas.length > 0;
 
   // Mapa: correção do estado de um tema. Não conta pontos na semana, mas mantém checklist e adiadas coerentes.
   const recuar = useCallback((id) => {
@@ -1121,19 +1180,24 @@ function App() {
   return (
     <div style={{ fontFamily: SANS, background: C.base, color: C.ink, minHeight: "100vh" }}>
       {temAtualizacao && (
-        <div style={{ background: C.tealSoft, borderBottom: `1px solid ${C.teal}`, padding: "10px 14px",
+        <div style={{ background: C.acentoSuave, borderBottom: `1px solid ${C.acento}`, padding: "10px 14px",
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           <span style={{ fontSize: 13, color: C.ink }}>Nova versão disponível.</span>
-          <button onClick={() => Atualizador.aplicar()} style={{ background: C.teal, color: C.base, border: "none",
+          <button onClick={() => Atualizador.aplicar()} style={{ background: C.acento, color: C.base, border: "none",
             padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: SANS }}>Atualizar</button>
         </div>
       )}
-      {pendentesDaVirada && pendentesDaVirada.itens.length > 0 && !viradaDepois && (
-        <PainelVirada k={pendentesDaVirada.k} itens={pendentesDaVirada.itens} fechar={fecharVirada} depois={() => setViradaDepois(true)} />)}
+      {manterAberto || (!viradaDepois && !passoVirada && perguntarManter)
+        ? <PainelManter seg={segAtual} sem={sem0} candidatos={candidatosManter} salvar={salvarManter}
+            depois={() => { if (manterAberto) setManterAberto(false); else setViradaDepois(true); }} />
+        : !viradaDepois && passoVirada && (
+          <PainelVirada k={pendentesDaVirada.k} itens={pendentesDaVirada.itens} fechar={fecharVirada}
+            depois={() => setViradaDepois(true)} />)}
       <Cabecalho plano={plano} cfg={cfg} blocos={blocos} hoje={hoje} registro={registro} segAtual={segAtual} sync={sync} />
       <div style={{ padding: "0 14px 96px" }}>
         {aba === "semana" && <Semana plano={plano} cfg={cfg} registro={registro} segAtual={segAtual} concluir={concluir}
-          desfazer={desfazer} anki={anki} trocarBonus={trocarBonus} manterBonus={marcarPerguntado} bonusAdiado={bonusAdiado} />}
+          desfazer={desfazer} anki={anki} trocarBonus={trocarBonus} manterBonus={marcarPerguntado} bonusAdiado={bonusAdiado}
+          abrirManter={regAtual ? () => setManterAberto(true) : null} />}
         {aba === "plano" && <PlanoSemanal plano={plano} segAtual={segAtual} cfg={cfg} />}
         {aba === "bonus" && <Bonus bonus={bonus} cfg={cfg} setCfg={setCfg}
           toggle={(id) => setBonus((bs) => bs.map((x) => x.id === id ? { ...x, feito: !x.feito } : x))} />}
@@ -1145,8 +1209,8 @@ function App() {
         {abas.map(([k, l]) => (
           <button key={k} onClick={() => setAba(k)} style={{
             flex: 1, padding: "12px 2px 16px", border: "none", background: "none", fontFamily: SANS, fontSize: 11.5,
-            cursor: "pointer", color: aba === k ? C.teal : C.ink2, fontWeight: aba === k ? 650 : 450,
-            borderTop: aba === k ? `2px solid ${C.teal}` : "2px solid transparent", marginTop: -1 }}>{l}</button>
+            cursor: "pointer", color: aba === k ? C.acento : C.ink2, fontWeight: aba === k ? 650 : 450,
+            borderTop: aba === k ? `2px solid ${C.acento}` : "2px solid transparent", marginTop: -1 }}>{l}</button>
         ))}
       </nav>
     </div>
@@ -1158,8 +1222,8 @@ function Anel({ pct, tamanho = 84, traco = 7, rotulo }) {
   const r = (tamanho - traco) / 2, circ = 2 * Math.PI * r;
   return (
     <svg width={tamanho} height={tamanho} style={{ display: "block", margin: "0 auto" }}>
-      <circle cx={tamanho / 2} cy={tamanho / 2} r={r} fill="none" stroke="#33414D" strokeWidth={traco} />
-      <circle cx={tamanho / 2} cy={tamanho / 2} r={r} fill="none" stroke={C.tealClaro} strokeWidth={traco}
+      <circle cx={tamanho / 2} cy={tamanho / 2} r={r} fill="none" stroke={C.line} strokeWidth={traco} />
+      <circle cx={tamanho / 2} cy={tamanho / 2} r={r} fill="none" stroke={C.acento} strokeWidth={traco}
         strokeDasharray={`${circ * pct} ${circ}`} strokeLinecap="round" transform={`rotate(-90 ${tamanho / 2} ${tamanho / 2})`} />
       <text x="50%" y="47%" textAnchor="middle" dy="0.1em" fill={C.ink} fontSize="21" fontFamily={SERIF}>{rotulo}</text>
       <text x="50%" y="68%" textAnchor="middle" fill={C.ink2} fontSize="9.5" fontFamily={SANS}
@@ -1178,7 +1242,7 @@ function proximaSemanaNum(blocos, n) {
 
 const ROTULO_SYNC = {
   local: ["neste aparelho", C.ink2], conectando: ["conectando…", C.ink2], deslogado: ["neste aparelho · sem login", C.ink2],
-  sincronizando: ["sincronizando…", C.ink2], sincronizado: ["sincronizado", C.tealClaro],
+  sincronizando: ["sincronizando…", C.ink2], sincronizado: ["sincronizado", C.ok],
   enviando: ["enviando alterações…", C.amber], offline: ["offline · salvo no aparelho", C.amber],
   indisponivel: ["neste aparelho · Firebase indisponível", C.amber], erro: ["erro de sincronização", C.red],
 };
@@ -1192,12 +1256,12 @@ function Cabecalho({ plano, cfg, blocos, hoje, registro, segAtual, sync }) {
 
   return (
     <header style={{ background: C.noite, padding: "18px 16px 16px", textAlign: "center" }}>
-      <h1 style={{ fontFamily: SERIF, fontSize: 25, fontWeight: 400, margin: 0, lineHeight: 1.15,
+      <h1 style={{ fontFamily: SERIF, fontSize: 25, fontWeight: 500, margin: 0, lineHeight: 1.15,
         letterSpacing: "-0.01em", color: C.ink }}>
         Planejamento de Estudos
       </h1>
 
-      <div style={{ fontSize: 15, marginTop: 10, color: C.tealClaro, fontWeight: 600, letterSpacing: "0.02em" }}>
+      <div style={{ fontSize: 15, marginTop: 10, color: C.acento, fontWeight: 600, letterSpacing: "0.02em" }}>
         Semana {cfg.semanaAtual}
       </div>
       <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 3 }}>{rotuloSemana(segAtual)}</div>
@@ -1235,52 +1299,109 @@ function Caixa({ valor, rot }) {
   </div>);
 }
 
-/* ---------- VIRADA DA SEMANA: o que ficou sem marcar ---------- */
+/* ---------- VIRADA DA SEMANA: o que ficou sem marcar e o que manter ---------- */
 const GRUPOS_VIRADA = [["aula", "Aulas"], ["questoes", "Questões"], ["revisao", "Revisões · flashcards"], ["bonus", "Aulas bônus"]];
-function PainelVirada({ k, itens, fechar, depois }) {
-  const [sel, setSel] = useState(() => new Set());
-  const alterna = (id, v) => setSel((x) => { const n = new Set(x); v ? n.add(id) : n.delete(id); return n; });
-  const pts = itens.filter((i) => sel.has(i.id)).reduce((a, i) => a + (i.peso || 0), 0);
+// moldura comum às duas etapas do painel
+function Modal({ rotulo, topo, titulo, texto, children, rodape }) {
   return (
-    <div role="dialog" aria-modal="true" aria-label="Fechamento da semana"
-      style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(8,12,16,0.78)", display: "flex",
+    <div role="dialog" aria-modal="true" aria-label={rotulo}
+      style={{ position: "fixed", inset: 0, zIndex: 50, background: C.veu, display: "flex",
         alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: "28px 12px" }}>
-      <div style={{ background: C.surface, width: "100%", maxWidth: 460, padding: "16px 15px", borderTop: `3px solid ${C.teal}` }}>
-        <div style={{ fontSize: 11.5, color: C.ink2, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-          Semana encerrada · {rotuloSemana(k)}</div>
-        <div style={{ fontFamily: SERIF, fontSize: 20, margin: "6px 0 4px", lineHeight: 1.25 }}>
-          Algo foi feito e ficou sem marcar?</div>
-        <div style={nota(0)}>
-          O que você marcar conta para aquela semana e sai das metas redistribuídas. O restante segue redistribuído.
-        </div>
-        {GRUPOS_VIRADA.map(([t, nome]) => {
-          const l = itens.filter((i) => i.tipo === t);
-          return l.length > 0 && (
-            <div key={t} style={{ marginTop: 13 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-                <span style={{ fontSize: 11, color: C.ink2, textTransform: "uppercase", letterSpacing: "0.04em" }}>{nome} · {l.length}</span>
-                <button onClick={() => { const todas = l.every((i) => sel.has(i.id)); l.forEach((i) => alterna(i.id, !todas)); }}
-                  style={{ border: "none", background: "none", color: C.teal, fontSize: 11.5, cursor: "pointer", padding: 0 }}>
-                  {l.every((i) => sel.has(i.id)) ? "desmarcar todas" : "marcar todas"}</button>
-              </div>
-              <div style={{ display: "grid", gap: 8 }}>
-                {l.map((i) => (
-                  <Opcao key={i.id} marcada={sel.has(i.id)} aoMudar={(v) => alterna(i.id, v)} cor={C.teal}>
-                    <span style={{ lineHeight: 1.35 }}>{i.tema}
-                      <span style={{ color: C.ink2, fontSize: 11.5 }}>{i.tipo === "revisao" || i.tipo === "questoes" ? ` · ${i.rotulo}` : ""} · {i.peso} pts</span>
-                    </span>
-                  </Opcao>))}
-              </div>
-            </div>);
-        })}
-        <div style={{ display: "flex", gap: 7, marginTop: 16, position: "sticky", bottom: -28,
-          background: C.surface, padding: "10px 0 12px", borderTop: `1px solid ${C.line}` }}>
-          <button style={{ ...BOTAO, flex: 1 }} onClick={() => fechar(k, [...sel])}>
-            {sel.size ? `Registrar ${sel.size} ${sel.size > 1 ? "itens" : "item"} · ${pts} pts` : "Nada a acrescentar"}</button>
-          <button style={{ ...BOTAO2, borderColor: C.line, color: C.ink2 }} onClick={depois}>Agora não</button>
-        </div>
+      <div style={{ background: C.surface, width: "100%", maxWidth: 460, padding: "18px 16px 0", border: `1px solid ${C.line}`,
+        borderRadius: 14, boxShadow: "0 12px 40px rgba(0,0,0,0.45)" }}>
+        <div style={{ fontSize: 11.5, color: C.ink2, letterSpacing: "0.02em" }}>{topo}</div>
+        <div style={{ fontFamily: SERIF, fontSize: 21, margin: "6px 0 5px", lineHeight: 1.25 }}>{titulo}</div>
+        <div style={nota(0)}>{texto}</div>
+        {children}
+        <div style={{ display: "flex", gap: 8, marginTop: 16, position: "sticky", bottom: -28,
+          background: C.surface, padding: "12px 0 14px", borderTop: `1px solid ${C.line}` }}>{rodape}</div>
       </div>
     </div>
+  );
+}
+// lista de itens com caixa de seleção, agrupada por tipo
+function ListaEscolha({ itens, sel, alterna, info }) {
+  return GRUPOS_VIRADA.map(([t, nome]) => {
+    const l = itens.filter((i) => i.tipo === t);
+    return l.length > 0 && (
+      <div key={t} style={{ marginTop: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+          <span style={{ fontSize: 11.5, color: C.ink2 }}>{nome} · {l.length}</span>
+          <button onClick={() => { const todas = l.every((i) => sel.has(i.id)); l.forEach((i) => alterna(i.id, !todas)); }}
+            style={{ border: "none", background: "none", color: C.acento, fontSize: 11.5, cursor: "pointer", padding: 0, fontFamily: SANS }}>
+            {l.every((i) => sel.has(i.id)) ? "desmarcar todas" : "marcar todas"}</button>
+        </div>
+        <div style={{ display: "grid", gap: 8 }}>
+          {l.map((i) => (
+            <Opcao key={i.id} marcada={sel.has(i.id)} aoMudar={(v) => alterna(i.id, v)} cor={C.acento}>
+              <span style={{ lineHeight: 1.35 }}>{i.tema}
+                <span style={{ color: C.ink2, fontSize: 11.5 }}>
+                  {i.tipo === "revisao" || i.tipo === "questoes" ? ` · ${i.rotulo}` : ""} · {i.peso} pts{info ? info(i) : ""}</span>
+              </span>
+            </Opcao>))}
+        </div>
+      </div>);
+  });
+}
+const useSelecao = (inicial) => {
+  const [sel, setSel] = useState(() => new Set(inicial));
+  const alterna = (id, v) => setSel((x) => { const n = new Set(x); v ? n.add(id) : n.delete(id); return n; });
+  return [sel, alterna];
+};
+
+function PainelVirada({ k, itens, fechar, depois }) {
+  const [sel, alterna] = useSelecao([]);
+  const pts = itens.filter((i) => sel.has(i.id)).reduce((a, i) => a + (i.peso || 0), 0);
+  return (
+    <Modal rotulo="Fechamento da semana" topo={`Semana encerrada · ${rotuloSemana(k)}`}
+      titulo="Algo foi feito e ficou sem marcar?"
+      texto="O que você marcar conta para aquela semana e sai das metas redistribuídas. O restante segue redistribuído."
+      rodape={<>
+        <button style={{ ...BOTAO, flex: 1 }} onClick={() => fechar(k, [...sel])}>
+          {sel.size ? `Registrar ${sel.size} ${sel.size > 1 ? "itens" : "item"} · ${pts} pts` : "Nada a acrescentar"}</button>
+        <button style={{ ...BOTAO2, borderColor: C.line, color: C.ink2 }} onClick={depois}>Agora não</button>
+      </>}>
+      <ListaEscolha itens={itens} sel={sel} alterna={alterna} />
+    </Modal>
+  );
+}
+
+function PainelManter({ seg, sem, candidatos, salvar, depois }) {
+  const { sobras, proximas, mantidos } = candidatos;
+  const [sel, alterna] = useSelecao(mantidos.map((i) => i.id));
+  const [verProximas, setVerProximas] = useState(!sobras.length && !mantidos.length);
+  const todos = [...mantidos, ...sobras, ...proximas];
+  const novos = todos.filter((i) => sel.has(i.id) && !i.fixado).reduce((a, i) => a + (i.peso || 0), 0);
+  const quando = (i) => (i.fixado ? "" : ` · previsto para ${fmt(i.seg)}`) + (i.comAula && !i.fixado ? " · entra junto com a aula" : "");
+  // função (não componente) para não recriar as caixas de seleção a cada toque
+  const grupo = (titulo, itens, info) => itens.length > 0 && (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>{titulo}</div>
+      <ListaEscolha itens={itens} sel={sel} alterna={alterna} info={info} />
+    </div>);
+  return (
+    <Modal rotulo="Assuntos da semana" topo={`Semana de ${rotuloSemana(seg)}`}
+      titulo="Quer manter algum assunto nesta semana?"
+      texto="Os escolhidos ficam nesta semana, logo depois das aulas dela. O que não couber do restante vai para as próximas."
+      rodape={<>
+        <button style={{ ...BOTAO, flex: 1 }} onClick={() => salvar([...sel])}>
+          {sel.size ? `Manter ${sel.size} nesta semana${novos ? ` · +${novos} pts` : ""}` : "Seguir o plano"}</button>
+        <button style={{ ...BOTAO2, borderColor: C.line, color: C.ink2 }} onClick={depois}>Agora não</button>
+      </>}>
+      {sem && <div style={{ ...nota(10), color: C.ink2 }}>Esta semana: {sem.pontos} de {sem.cap} pontos planejados.</div>}
+      {grupo("Já mantidos nesta semana", mantidos)}
+      {grupo("Ficaram da semana passada", sobras, quando)}
+      {!sobras.length && !mantidos.length && (
+        <div style={nota(14)}>Nada da semana passada foi empurrado para depois.</div>)}
+      {proximas.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <button onClick={() => setVerProximas(!verProximas)} aria-expanded={verProximas}
+            style={{ border: "none", background: "none", padding: 0, cursor: "pointer", color: C.acento, fontSize: 12.5,
+              fontWeight: 600, fontFamily: SANS }}>
+            {verProximas ? "▾" : "▸"} Adiantar das próximas semanas · {proximas.length}</button>
+          {verProximas && <ListaEscolha itens={proximas} sel={sel} alterna={alterna} info={quando} />}
+        </div>)}
+    </Modal>
   );
 }
 
@@ -1333,7 +1454,7 @@ function TrocaBonus({ itens, aberto, setAberto, trocar, manter, perguntado }) {
   );
 }
 
-function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki, trocarBonus, manterBonus, bonusAdiado }) {
+function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki, trocarBonus, manterBonus, bonusAdiado, abrirManter }) {
   const [trocaAberta, setTrocaAberta] = useState(false);
   const s = registro[segAtual] || { planejados: [], feitos: [] };
   const feitos = new Set(s.feitos);
@@ -1343,9 +1464,9 @@ function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki, troc
     ["Metas redistribuídas", g((i) => i.adiado > 0), C.amber],
     ["Aulas da semana", g((i) => !i.adiado && i.tipo === "aula"), areaColor("CLÍNICA")],
     ["Questões das aulas", g((i) => !i.adiado && i.tipo === "questoes"), C.card],
-    ["Revisões · flashcards", g((i) => !i.adiado && i.tipo === "revisao"), C.tealClaro],
+    ["Revisões · flashcards", g((i) => !i.adiado && i.tipo === "revisao"), C.rev],
     ["Aulas bônus", g((i) => !i.adiado && i.tipo === "bonus" && !i.baixa), C.star],
-    ["Bônus de baixa prioridade", g((i) => !i.adiado && i.tipo === "bonus" && i.baixa), C.pend],
+    ["Bônus de baixa prioridade", g((i) => !i.adiado && i.tipo === "bonus" && i.baixa), C.ink3],
   ];
   const sem = plano.semanas[0];
   const feitoPts = s.planejados.filter((p) => feitos.has(p.id)).reduce((a, p) => a + (p.peso || 0), 0);
@@ -1357,12 +1478,20 @@ function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki, troc
         trocar={trocarBonus} manter={manterBonus} perguntado={!!s.bonusPerguntado} />
       {sem && sem.pontos > sem.cap && (
         <div style={{ marginTop: 14 }}><Aviso>
-          As aulas desta semana ocupam {sem.pontos} pontos, acima da capacidade de {sem.cap}. Elas têm prioridade e
-          ficam na semana; o resto foi adiado. Se isso se repetir, aumente a capacidade em Dados.
+          {sem.itens.some((i) => i.fixado)
+            ? <>As aulas da semana e os assuntos que você manteve somam {sem.pontos} pontos, acima da capacidade de {sem.cap}.
+              Eles ficam na semana; o resto foi adiado.</>
+            : <>As aulas desta semana ocupam {sem.pontos} pontos, acima da capacidade de {sem.cap}. Elas têm prioridade e
+              ficam na semana; o resto foi adiado. Se isso se repetir, aumente a capacidade em Dados.</>}
         </Aviso></div>
       )}
       <SecaoTitulo texto={`Checklist da semana · ${feitoPts} de ${sem ? sem.pontos : 0} pontos${
         sem && sem.fator < 1 ? ` · carga reduzida ${Math.round((1 - sem.fator) * 100)}%` : ""}`} />
+      {abrirManter && <button onClick={abrirManter} style={{ border: "none", background: "none", padding: 0, margin: "-3px 0 6px",
+        cursor: "pointer", color: C.acento, fontSize: 12.5, fontFamily: SANS }}>
+        {(() => { const n = (sem ? sem.itens : []).filter((i) => i.fixado).length;
+          return n ? `${n} ${n > 1 ? "assuntos mantidos" : "assunto mantido"} nesta semana · alterar` : "Manter assuntos específicos nesta semana"; })()}
+      </button>}
       {itens.length === 0 && <Vazio texto="Semana zerada. Os objetivos da próxima aparecem no sábado." />}
       {grupos.map(([t, l, cor]) => l.length > 0 && (
         <div key={t} style={{ marginBottom: 14 }}>
@@ -1373,7 +1502,7 @@ function Semana({ plano, cfg, registro, segAtual, concluir, desfazer, anki, troc
                 <button onClick={() => setTrocaAberta(true)} style={{ border: "none", background: "none", color: C.star,
                   fontSize: 11, marginRight: 10, cursor: "pointer", padding: 0, textDecoration: "underline" }}>trocar</button>)}
               {t === "Revisões · flashcards" && ehAndroid() && (
-                <a href={ABRIR_ANKIDROID} style={{ color: C.tealClaro, marginRight: 10, textDecoration: "none" }}>Abrir AnkiDroid</a>)}
+                <a href={ABRIR_ANKIDROID} style={{ color: C.rev, marginRight: 10, textDecoration: "none" }}>Abrir AnkiDroid</a>)}
               {l.length} · {l.reduce((a, i) => a + i.peso, 0)} pts
             </span>
           </div>
@@ -1399,8 +1528,8 @@ function Concluido({ p, desfazer, peloAnki }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button onClick={() => setAberto(!aberto)} aria-label="Opções" title="Desfazer marcação"
           style={{ width: 21, height: 21, flexShrink: 0, cursor: "pointer",
-            border: `1px solid ${aberto ? C.teal : C.line}`, background: "transparent", borderRadius: 4,
-            color: aberto ? C.teal : C.ink2, fontSize: 12, lineHeight: 1, padding: 0 }}>✕</button>
+            border: `1px solid ${aberto ? C.acento : C.line}`, background: "transparent", borderRadius: 4,
+            color: aberto ? C.acento : C.ink2, fontSize: 12, lineHeight: 1, padding: 0 }}>✕</button>
         <span style={{ fontSize: 13, color: C.ink2, lineHeight: 1.4, textDecoration: "line-through", flex: 1 }}>
           {p.tema} <span style={{ color: C.ink2 }}>· {p.peso} pts</span>
         </span>
@@ -1409,10 +1538,10 @@ function Concluido({ p, desfazer, peloAnki }) {
       {aberto && (
         <div style={{ display: "flex", gap: 7, margin: "8px 0 10px 31px" }}>
           <button style={opc} onClick={() => { desfazer(p, "pendencia"); setAberto(false); }}>
-            Voltar às pendências<br /><span style={{ color: C.line }}>fica nesta semana</span>
+            Voltar às pendências<br /><span style={{ color: C.ink3 }}>fica nesta semana</span>
           </button>
           <button style={opc} onClick={() => { desfazer(p, "remover"); setAberto(false); }}>
-            Tirar da semana<br /><span style={{ color: C.line }}>reagenda para outra</span>
+            Tirar da semana<br /><span style={{ color: C.ink3 }}>reagenda para outra</span>
           </button>
         </div>
       )}
@@ -1427,7 +1556,7 @@ function LinhaAnki({ item, cfg, anki }) {
   if (!st) return <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 4 }}>Anki: aguardando leitura no computador</div>;
   const zerado = st.pend === 0;
   return (
-    <div style={{ fontSize: 11.5, marginTop: 4, color: zerado ? C.tealClaro : C.card }}>
+    <div style={{ fontSize: 11.5, marginTop: 4, color: zerado ? C.ok : C.card }}>
       Anki: {zerado ? "nenhum cartão pendente" : `${st.pend} cartões pendentes`}
       {st.rev > 0 && <span style={{ color: C.ink2 }}> · {st.rev} revisados na semana</span>}
       <span style={{ color: C.ink2 }}> · lido {horaCurta(st.em)}</span>
@@ -1436,21 +1565,22 @@ function LinhaAnki({ item, cfg, anki }) {
 }
 
 function Item({ item, concluir, cfg, anki }) {
-  const cor = item.tipo === "bonus" ? (item.baixa ? C.pend : C.star)
-    : item.tipo === "questoes" ? C.card : item.tipo === "revisao" ? C.tealClaro : areaColor(item.area);
+  const cor = item.tipo === "bonus" ? (item.baixa ? C.ink3 : C.star)
+    : item.tipo === "questoes" ? C.card : item.tipo === "revisao" ? C.rev : areaColor(item.area);
   return (
-    <div style={{ background: C.surface, borderLeft: `3px solid ${item.adiado > 0 ? C.amber : cor}`,
-      marginBottom: 7, padding: "10px 12px", display: "flex", gap: 11, alignItems: "flex-start" }}>
+    <div style={{ background: C.surface, borderLeft: `3px solid ${item.adiado > 0 ? C.amber : cor}`, borderRadius: 10,
+      marginBottom: 7, padding: "11px 12px", display: "flex", gap: 11, alignItems: "flex-start" }}>
       <button onClick={() => concluir(item)} aria-label="Concluir" style={{
         width: 23, height: 23, flexShrink: 0, marginTop: 1, cursor: "pointer", border: `1.5px solid ${cor}`,
-        background: "transparent", borderRadius: 4, color: cor, fontSize: 13.5, lineHeight: 1, padding: 0 }}>✓</button>
+        background: "transparent", borderRadius: 6, color: cor, fontSize: 13.5, lineHeight: 1, padding: 0 }}>✓</button>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 11, color: cor, fontWeight: 600, marginBottom: 2 }}>
           Semana {item.semana} · {item.rotulo}
           {item.atraso > 0 && <span style={{ color: C.amber }}> · {item.atraso}d de atraso</span>}
           {item.atrasada && <span style={{ color: C.amber }}> · aula atrasada</span>}
+          {item.fixado && <span style={{ color: C.ok }}> · mantido nesta semana</span>}
         </div>
-        <div style={{ fontSize: 14.5, lineHeight: 1.3 }}>{item.tema}</div>
+        <div style={{ fontFamily: SERIF, fontSize: 15.5, lineHeight: 1.3 }}>{item.tema}</div>
         <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 3 }}>
           {item.peso} pts
           {item.questoes > 0 && item.tipo !== "revisao" && ` · ${item.questoes} questões`}
@@ -1498,26 +1628,26 @@ function Grafico({ registro, segAtual, plano }) {
         {dados.map((d, i) => {
           const x = i * (L + G), hT = (d.total / max) * H, hF = (d.feitos / max) * H;
           return (<g key={d.k}>
-            {d.previsto
-              ? <rect x={x + 0.5} y={H - hT} width={L - 1} height={hT} fill="none" stroke={C.pend} strokeWidth="1"
-                  strokeDasharray={d.fator < 1 ? "2 2" : "0"} />
-              : <rect x={x} y={H - hT} width={L} height={hT} fill={d.fechada ? C.falta : C.pend} />}
-            {hF > 0 && <rect x={x} y={H - hF} width={L} height={hF} fill={d.atual ? C.teal : C.tealClaro} />}
-            {d.atual && <rect x={x} y={H + 3} width={L} height={2} fill={C.teal} />}
+            {/* cumprido: coral sólido · não cumprido (semana fechada): vermelho sólido · em aberto e previsto: só contorno */}
+            {d.fechada && hT > hF && <rect x={x} y={H - hT} width={L} height={hT - hF} fill={C.falta} />}
+            {hF > 0 && <rect x={x} y={H - hF} width={L} height={hF} fill={C.acento} />}
+            <rect x={x + 0.5} y={H - hT + 0.5} width={L - 1} height={Math.max(0, hT - 1)} fill="none" stroke={C.contorno}
+              strokeWidth="1" strokeDasharray={d.previsto && d.fator < 1 ? "2 2" : "0"} />
+            {d.atual && <rect x={x} y={H + 3} width={L} height={2} fill={C.acento} />}
             <text x={x + L / 2} y={H + 12} textAnchor="end" fontSize="7" fontFamily={SANS}
-              fill={d.atual ? C.teal : C.ink2} fontWeight={d.atual ? 600 : 400}
+              fill={d.atual ? C.acento : C.ink2} fontWeight={d.atual ? 600 : 400}
               transform={`rotate(-60 ${x + L / 2} ${H + 12})`}>{fmtCurto(d.k)}</text>
           </g>);
         })}
       </svg>
       <div style={{ display: "flex", gap: 14, marginTop: 9, fontSize: 11, color: C.ink2, flexWrap: "wrap" }}>
-        <Leg cor={C.tealClaro} t={`${totFeitos} cumpridos`} />
+        <Leg cor={C.acento} t={`${totFeitos} cumpridos`} />
         <Leg cor={C.falta} t={`${totFalta} não cumpridos`} />
-        <Leg cor={C.pend} t={`${totPend} em aberto`} />
-        <Leg contorno t={`${totPrev} previstos`} />
+        <Leg contorno t={`${totPend} em aberto · ${totPrev} previstos`} />
       </div>
       <div style={{ fontSize: 11, color: C.ink2, marginTop: 7, lineHeight: 1.45 }}>
-        Vermelho é o que ficou por fazer em semanas já fechadas; contorno tracejado marca carga reduzida.
+        Vermelho é o que ficou por fazer em semanas já fechadas; a parte só com contorno ainda está por fazer.
+        Contorno tracejado marca carga reduzida.
       </div>
     </div>
   );
@@ -1525,7 +1655,7 @@ function Grafico({ registro, segAtual, plano }) {
 const Leg = ({ cor, t, contorno }) => (
   <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
     <span style={{ width: 10, height: 10, display: "inline-block",
-      background: contorno ? "transparent" : cor, border: contorno ? `1px solid ${C.pend}` : "none" }} />{t}</span>);
+      background: contorno ? "transparent" : cor, border: contorno ? `1px solid ${C.contorno}` : "none", borderRadius: 2 }} />{t}</span>);
 
 /* ---------- PLANO ---------- */
 function PlanoSemanal({ plano, segAtual, cfg }) {
@@ -1537,9 +1667,9 @@ function PlanoSemanal({ plano, segAtual, cfg }) {
         const atual = s.seg === segAtual;
         return (
           <div key={s.seg} style={{ background: C.surface, marginBottom: 7, padding: "11px 12px",
-            outline: atual ? `1.5px solid ${C.teal}` : "none" }}>
+            outline: atual ? `1.5px solid ${C.acento}` : "none" }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12,
-              color: atual ? C.teal : C.ink2, marginBottom: 8, fontWeight: atual ? 600 : 400 }}>
+              color: atual ? C.acento : C.ink2, marginBottom: 8, fontWeight: atual ? 600 : 400 }}>
               <span>{rotuloSemana(s.seg)}{atual ? " · atual" : ""}</span>
               <span>{s.pontos}/{s.cap} pts{s.fator < 1 ? " · reduzida" : ""}</span>
             </div>
@@ -1565,7 +1695,7 @@ function Bonus({ bonus, cfg, setCfg, toggle }) {
   const pend = bonus.filter((x) => !x.feito && peso(x) >= 2).sort(ord);
   const baixa = bonus.filter((x) => !x.feito && peso(x) <= 1).sort(ord);
   const bf = (a) => ({ flex: 1, padding: "9px 6px", fontSize: 12.5, cursor: "pointer", fontFamily: SANS,
-    border: `1px solid ${a ? C.teal : C.line}`, background: a ? C.tealSoft : "transparent", color: a ? C.teal : C.ink2, fontWeight: a ? 600 : 400 });
+    border: `1px solid ${a ? C.acento : C.line}`, background: a ? C.acentoSuave : "transparent", color: a ? C.acento : C.ink2, fontWeight: a ? 600 : 400 });
   return (
     <div>
       <Secao titulo="Banca de referência">
@@ -1596,14 +1726,14 @@ function Bonus({ bonus, cfg, setCfg, toggle }) {
       {pend.length === 0 && <Vazio texto="Nenhuma bônus prioritária pendente." />}
       <SecaoTitulo texto={`Baixa prioridade · ${baixa.length}`} />
       <div style={{ background: C.surface, padding: "11px 12px" }}>
-        <button onClick={() => setVerTudo(!verTudo)} style={{ border: "none", background: "none", color: C.teal,
+        <button onClick={() => setVerTudo(!verTudo)} style={{ border: "none", background: "none", color: C.acento,
           fontSize: 13, cursor: "pointer", padding: 0, textDecoration: "underline" }}>{verTudo ? "ocultar" : "mostrar lista"}</button>
         {verTudo && <div style={{ marginTop: 9 }}>{baixa.map((x) => (
           <div key={x.id} style={{ display: "flex", gap: 9, alignItems: "flex-start", marginTop: 7 }}>
             <button onClick={() => toggle(x.id)} style={{ width: 19, height: 19, flexShrink: 0, marginTop: 2, cursor: "pointer",
               border: `1.5px solid ${C.line}`, background: "transparent", borderRadius: 3, color: C.ink2, fontSize: 11, lineHeight: 1, padding: 0 }}>✓</button>
             <div style={{ fontSize: 13, color: C.ink2, lineHeight: 1.4 }}>
-              {x.nome}<span style={{ color: C.line }}> · S{x.semana}</span>
+              {x.nome}<span style={{ color: C.ink3 }}> · S{x.semana}</span>
               {peso(x) === 1 && <span style={{ color: C.star }}> ★</span>}
             </div>
           </div>))}</div>}
@@ -1633,12 +1763,12 @@ function Mapa({ blocos, recuar, avancar, cfg, adiados }) {
         const media = itens.reduce((x, b) => x + Math.min(b.etapa, CONCLUIDO), 0) / (itens.length * CONCLUIDO);
         const atual = Number(s) === cfg.semanaAtual;
         return (
-          <div key={s} style={{ background: C.surface, padding: "10px 12px", marginBottom: 6, outline: atual ? `1.5px solid ${C.teal}` : "none" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: atual ? C.teal : C.ink2, marginBottom: 5 }}>
+          <div key={s} style={{ background: C.surface, padding: "10px 12px", marginBottom: 6, outline: atual ? `1.5px solid ${C.acento}` : "none" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: atual ? C.acento : C.ink2, marginBottom: 5 }}>
               <span>Semana {s}{atual ? " · atual" : ""}</span><span>{Math.round(media * 100)}%</span>
             </div>
-            <div style={{ height: 3, background: C.pend, marginBottom: 7 }}>
-              <div style={{ width: media * 100 + "%", height: "100%", background: C.tealClaro }} />
+            <div style={{ height: 3, background: C.line, marginBottom: 7 }}>
+              <div style={{ width: media * 100 + "%", height: "100%", background: C.acento }} />
             </div>
             {itens.map((b) => (
               <div key={b.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13.5, lineHeight: 1.45, marginBottom: 3 }}>
@@ -1649,7 +1779,7 @@ function Mapa({ blocos, recuar, avancar, cfg, adiados }) {
                   <button onClick={() => recuar(b.id)} disabled={b.etapa === 0} aria-label="Recuar etapa" title="Desmarcar a última etapa"
                     style={{ ...passo, opacity: b.etapa === 0 ? 0.3 : 1 }}>−</button>
                   <span style={{ fontSize: 11.5, whiteSpace: "nowrap", minWidth: 78, textAlign: "center",
-                    color: b.etapa >= CONCLUIDO ? C.tealClaro : b.etapa === 0 ? C.red : C.ink2 }}>
+                    color: b.etapa >= CONCLUIDO ? C.ok : b.etapa === 0 ? C.red : C.ink2 }}>
                     {b.etapa >= CONCLUIDO ? "concluído" : b.etapa === 0 ? "aula pendente" : ESCADA[b.etapa].nome.replace("Revisão ", "R ").replace("Questões pós-aula", "questões")}
                   </span>
                   <button onClick={() => avancar(b.id)} disabled={b.etapa >= CONCLUIDO} aria-label="Avançar etapa" title="Marcar a etapa atual como feita"
@@ -1718,7 +1848,7 @@ function PainelVersao() {
     <div style={CARTAO}>
       <div style={{ fontSize: 13 }}>Versão instalada: {APP_VERSION}</div>
       {tem ? (
-        <button style={{ ...BOTAO2, marginTop: 11, width: "100%", background: C.teal, color: C.base, border: "none" }}
+        <button style={{ ...BOTAO2, marginTop: 11, width: "100%", background: C.acento, color: C.base, border: "none" }}
           onClick={() => Atualizador.aplicar()}>Instalar nova versão</button>
       ) : (
         <button style={{ ...BOTAO2, marginTop: 11, width: "100%" }} onClick={verificar} disabled={busy}>
@@ -1794,7 +1924,7 @@ function PainelAnki({ cfg, setCfg, blocos, lerAnki, ankiMsg }) {
           <button style={{ ...BOTAO2, marginTop: 7, width: "100%" }} onClick={() => lerAnki()}>Ler contagens agora</button>
         </>
       )}
-      {msg && <div style={{ fontSize: 12.5, color: C.teal, marginTop: 9, lineHeight: 1.5 }}>{msg}</div>}
+      {msg && <div style={{ fontSize: 12.5, color: C.acento, marginTop: 9, lineHeight: 1.5 }}>{msg}</div>}
       {loc.ativo && ankiMsg && <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 6, lineHeight: 1.5 }}>{ankiMsg}</div>}
 
       <div style={{ marginTop: 13 }}><Opcao marcada={cfg.ankiAuto} aoMudar={(v) => setCfg({ ...cfg, ankiAuto: v })} cor={C.card}>Marcar a revisão sozinho quando o baralho zerar</Opcao></div>
@@ -1803,7 +1933,7 @@ function PainelAnki({ cfg, setCfg, blocos, lerAnki, ankiMsg }) {
         pelo menos um cartão dele desde sábado.
       </div>
 
-      <button onClick={() => setVerMapa(!verMapa)} style={{ border: "none", background: "none", color: C.teal, fontSize: 13,
+      <button onClick={() => setVerMapa(!verMapa)} style={{ border: "none", background: "none", color: C.acento, fontSize: 13,
         cursor: "pointer", padding: 0, marginTop: 12, textDecoration: "underline" }}>
         {verMapa ? "Ocultar associações" : `Ver associações (${nAssoc} de ${blocos.length} aulas)`}
       </button>
@@ -1982,7 +2112,7 @@ function Dados({ estado, aplicarEstado, setCfg, setBlocos, setAdiados, plano, ho
               registro: d.registro || {}, adiados: d.adiados || {}, excluidos: d.excluidos || {}, anki: d.anki, bonusAdiado: d.bonusAdiado });
             setMsg("Backup restaurado."); setTexto("");
           } catch { setMsg("JSON inválido."); } }}>Restaurar backup</button>
-        {msg && <div style={{ fontSize: 12.5, color: C.teal, marginTop: 9 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 12.5, color: C.acento, marginTop: 9 }}>{msg}</div>}
       </Secao>
 
       <Secao titulo="Semana atual e prova">
@@ -2004,11 +2134,12 @@ function Dados({ estado, aplicarEstado, setCfg, setBlocos, setAdiados, plano, ho
 }
 
 /* ---------- peças de interface reaproveitadas ---------- */
-const CARTAO = { background: C.surface, padding: 13, marginBottom: 12 };
-const CAMPO = { width: "100%", padding: "9px 10px", border: `1px solid ${C.line}`, fontSize: 15, fontFamily: SANS,
-  background: C.base, color: C.ink, colorScheme: "dark", boxSizing: "border-box" };
-const BOTAO = { background: C.teal, color: C.base, border: "none", padding: "10px 14px", fontSize: 13.5, cursor: "pointer", fontFamily: SANS };
-const BOTAO2 = { ...BOTAO, background: "transparent", color: C.teal, border: `1px solid ${C.teal}` };
+const CARTAO = { background: C.surface, padding: 14, marginBottom: 12, borderRadius: 12 };
+const CAMPO = { width: "100%", padding: "9px 11px", border: `1px solid ${C.line}`, fontSize: 15, fontFamily: SANS,
+  background: C.noite, color: C.ink, colorScheme: "dark", boxSizing: "border-box", borderRadius: 8 };
+const BOTAO = { background: C.acento, color: C.noite, border: "none", padding: "10px 14px", fontSize: 13.5, cursor: "pointer",
+  fontFamily: SANS, fontWeight: 600, borderRadius: 8 };
+const BOTAO2 = { ...BOTAO, background: "transparent", color: C.acento, border: `1px solid ${C.acento}` };
 const nota = (mt = 7, cor = C.ink2) => ({ fontSize: 12, color: cor, marginTop: mt, lineHeight: 1.5 });
 const rotulo = { fontSize: 12.5, color: C.ink2, display: "block" };
 
@@ -2016,26 +2147,26 @@ const Secao = ({ titulo, cor, children }) => (<>
   <SecaoTitulo texto={titulo} cor={cor} />
   <div style={CARTAO}>{children}</div>
 </>);
-const Opcao = ({ marcada, aoMudar, cor = C.card, children }) => (
+const Opcao = ({ marcada, aoMudar, cor = C.acento, children }) => (
   <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13, cursor: "pointer" }}>
     <input type="checkbox" checked={marcada} onChange={(e) => aoMudar(e.target.checked)}
       style={{ accentColor: cor, width: 17, height: 17, flexShrink: 0 }} />
     {children}
   </label>);
-const Faixa = ({ cfg, setCfg, chave, min, max, passo = 1, cor = C.teal, mt }) => (
+const Faixa = ({ cfg, setCfg, chave, min, max, passo = 1, cor = C.acento, mt }) => (
   <input type="range" min={min} max={max} step={passo} value={cfg[chave]}
     style={{ width: "100%", accentColor: cor, ...(mt ? { marginTop: mt } : {}) }}
     onChange={(e) => setCfg({ ...cfg, [chave]: Number(e.target.value) })} />);
 const Aviso = ({ cor = C.amber, fundo = C.amberSoft, children }) => (
-  <div style={{ background: fundo, borderLeft: `3px solid ${cor}`, padding: "11px 12px", fontSize: 12.5, lineHeight: 1.5 }}>
+  <div style={{ background: fundo, borderLeft: `3px solid ${cor}`, padding: "11px 12px", fontSize: 12.5, lineHeight: 1.5, borderRadius: 8 }}>
     {children}
   </div>);
 
 /* ---------- primitivos ---------- */
 const SecaoTitulo = ({ texto, cor }) => (
-  <h2 style={{ fontSize: 13, fontWeight: 600, color: cor || C.ink2, margin: "18px 0 9px" }}>{texto}</h2>);
+  <h2 style={{ fontFamily: SERIF, fontSize: 16, fontWeight: 500, color: cor || C.ink, margin: "20px 0 10px", lineHeight: 1.3 }}>{texto}</h2>);
 const Vazio = ({ texto }) => (
-  <div style={{ background: C.surface, padding: "16px 13px", fontSize: 13.5, color: C.ink2, lineHeight: 1.5, borderLeft: `3px solid ${C.line}` }}>{texto}</div>);
+  <div style={{ background: C.surface, padding: "16px 14px", fontSize: 13.5, color: C.ink2, lineHeight: 1.5, borderRadius: 12 }}>{texto}</div>);
 
 /* ---------- montagem ---------- */
 ReactDOM.createRoot(document.getElementById("raiz")).render(<App />);
