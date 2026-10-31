@@ -128,6 +128,16 @@ e ficou sem marcar. Marque o que você fez e esqueceu de registrar (há "marcar 
 data do fim daquela semana. **Nada a acrescentar** encerra sem mudar nada; **Agora não** adia o painel para a
 próxima abertura. A resposta vale para todos os aparelhos sincronizados.
 
+### Assuntos para manter na semana
+
+Logo depois (ou direto, se não ficou nada sem marcar), o painel pergunta **se você quer manter algum assunto
+nesta semana**. Ele mostra o que sobrou da semana passada e foi empurrado para depois e, em **Adiantar das próximas
+semanas**, o que está previsto para as duas semanas seguintes. Os escolhidos entram nesta semana logo depois das
+aulas dela, e o que não couber do restante vai para as próximas semanas. **Seguir o plano** deixa o app decidir.
+Durante a semana, o atalho abaixo do título do checklist reabre a escolha para acrescentar ou tirar assuntos;
+os mantidos aparecem com a marca "mantido nesta semana". Não dá para manter uma aula de semana futura (ela tem a
+semana dela), questões antes da aula correspondente, nem uma bônus que você trocou.
+
 ## Prioridade das aulas da semana
 
 As aulas programadas para a semana do extensivo entram sempre na sua própria semana e reservam os pontos delas

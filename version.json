@@ -1,1 +1,1 @@
-{ "versao": "1.6.1", "notas": "Revisao completa: limite semanal conta o que ja foi feito; marcacoes feitas sem Firebase nao se perdem; revisoes contadas a partir da aula; correcoes no desfazer, Mapa, backup, virada com o app aberto e atualizacao." }
+{ "versao": "1.7.0", "notas": "Escolha de assuntos para manter na semana (painel da abertura da semana e atalho no checklist); visual no estilo do Claude em modo noturno; total de pontos da semana corrigido com o Firebase." }
