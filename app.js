@@ -1,7 +1,7 @@
 /* gerado a partir de app.jsx */
 "use strict";
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
-const APP_VERSION = "1.7.0";
+const APP_VERSION = "1.7.1";
 /* ============================================================
    PLANEJAMENTO DE ESTUDOS — residência 2027
    Cronograma: MEDPlanner | MEDCURSO 2026 (Notion)
@@ -17,12 +17,24 @@ const C = {
     acento: "#E08566", acentoSuave: "#3A2A22",
     ok: "#9DBF8E", rev: "#8DBFB3", card: "#8FAFD8", star: "#E2B35C",
     amber: "#D9A04E", amberSoft: "#3A3122", red: "#F28B82",
-    falta: "#9E3F37", contorno: "#85837A", // gráfico: não cumprido (sólido) e contorno das barras
+    cumprido: "#8CCB84", falta: "#B8443D", contorno: "#85837A", // gráfico de barras: cumprido, não cumprido, contorno
     veu: "rgba(15,15,14,0.74)",
 };
 // fontes: serifa para títulos e conteúdo (como a do Claude; Georgia é a alternativa livre), sans para a interface
 const SANS = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
 const SERIF = "Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Times New Roman', serif";
+// cor do anel conforme a porcentagem cumprida: vermelho → laranja → amarelo → verde
+const ESCALA_PROGRESSO = [[0, "#E5675F"], [1 / 3, "#E8904F"], [2 / 3, "#E6C35C"], [1, "#7FC27B"]];
+function corDoProgresso(pct) {
+    const p = Math.min(1, Math.max(0, Number(pct) || 0));
+    let i = 0;
+    while (i < ESCALA_PROGRESSO.length - 2 && p > ESCALA_PROGRESSO[i + 1][0])
+        i++;
+    const [p0, c0] = ESCALA_PROGRESSO[i], [p1, c1] = ESCALA_PROGRESSO[i + 1], t = (p - p0) / (p1 - p0);
+    const rgb = (h) => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
+    const a = rgb(c0), b = rgb(c1);
+    return "#" + a.map((v, k) => Math.round(v + (b[k] - v) * t).toString(16).padStart(2, "0")).join("").toUpperCase();
+}
 const AREAS = { "CLÍNICA": "#CDBFA8", "CIRURGIA": "#86A9CF", "PEDIATRIA": "#D490AE", "GO": "#A992D4", "PREVENTIVA": "#93BC80" };
 const areaColor = (a) => AREAS[a] || C.ink2;
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -1434,7 +1446,7 @@ function Anel({ pct, tamanho = 84, traco = 7, rotulo }) {
     const r = (tamanho - traco) / 2, circ = 2 * Math.PI * r;
     return (React.createElement("svg", { width: tamanho, height: tamanho, style: { display: "block", margin: "0 auto" } },
         React.createElement("circle", { cx: tamanho / 2, cy: tamanho / 2, r: r, fill: "none", stroke: C.line, strokeWidth: traco }),
-        React.createElement("circle", { cx: tamanho / 2, cy: tamanho / 2, r: r, fill: "none", stroke: C.acento, strokeWidth: traco, strokeDasharray: `${circ * pct} ${circ}`, strokeLinecap: "round", transform: `rotate(-90 ${tamanho / 2} ${tamanho / 2})` }),
+        React.createElement("circle", { cx: tamanho / 2, cy: tamanho / 2, r: r, fill: "none", stroke: corDoProgresso(pct), strokeWidth: traco, strokeDasharray: `${circ * pct} ${circ}`, strokeLinecap: "round", transform: `rotate(-90 ${tamanho / 2} ${tamanho / 2})` }),
         React.createElement("text", { x: "50%", y: "47%", textAnchor: "middle", dy: "0.1em", fill: C.ink, fontSize: "21", fontFamily: SERIF }, rotulo),
         React.createElement("text", { x: "50%", y: "68%", textAnchor: "middle", fill: C.ink2, fontSize: "9.5", fontFamily: SANS, letterSpacing: "0.08em" }, "PONTOS")));
 }
@@ -1730,7 +1742,7 @@ function Item({ item, concluir, cfg, anki }) {
                     "d de atraso"),
                 item.atrasada && React.createElement("span", { style: { color: C.amber } }, " \u00B7 aula atrasada"),
                 item.fixado && React.createElement("span", { style: { color: C.ok } }, " \u00B7 mantido nesta semana")),
-            React.createElement("div", { style: { fontFamily: SERIF, fontSize: 15.5, lineHeight: 1.3 } }, item.tema),
+            React.createElement("div", { style: { fontSize: 14.5, lineHeight: 1.3 } }, item.tema),
             React.createElement("div", { style: { fontSize: 11.5, color: C.ink2, marginTop: 3 } },
                 item.peso,
                 " pts",
@@ -1775,16 +1787,16 @@ function Grafico({ registro, segAtual, plano }) {
             const x = i * (L + G), hT = (d.total / max) * H, hF = (d.feitos / max) * H;
             return (React.createElement("g", { key: d.k },
                 d.fechada && hT > hF && React.createElement("rect", { x: x, y: H - hT, width: L, height: hT - hF, fill: C.falta }),
-                hF > 0 && React.createElement("rect", { x: x, y: H - hF, width: L, height: hF, fill: C.acento }),
+                hF > 0 && React.createElement("rect", { x: x, y: H - hF, width: L, height: hF, fill: C.cumprido }),
                 React.createElement("rect", { x: x + 0.5, y: H - hT + 0.5, width: L - 1, height: Math.max(0, hT - 1), fill: "none", stroke: C.contorno, strokeWidth: "1", strokeDasharray: d.previsto && d.fator < 1 ? "2 2" : "0" }),
                 d.atual && React.createElement("rect", { x: x, y: H + 3, width: L, height: 2, fill: C.acento }),
                 React.createElement("text", { x: x + L / 2, y: H + 12, textAnchor: "end", fontSize: "7", fontFamily: SANS, fill: d.atual ? C.acento : C.ink2, fontWeight: d.atual ? 600 : 400, transform: `rotate(-60 ${x + L / 2} ${H + 12})` }, fmtCurto(d.k))));
         })),
         React.createElement("div", { style: { display: "flex", gap: 14, marginTop: 9, fontSize: 11, color: C.ink2, flexWrap: "wrap" } },
-            React.createElement(Leg, { cor: C.acento, t: `${totFeitos} cumpridos` }),
+            React.createElement(Leg, { cor: C.cumprido, t: `${totFeitos} cumpridos` }),
             React.createElement(Leg, { cor: C.falta, t: `${totFalta} não cumpridos` }),
             React.createElement(Leg, { contorno: true, t: `${totPend} em aberto · ${totPrev} previstos` })),
-        React.createElement("div", { style: { fontSize: 11, color: C.ink2, marginTop: 7, lineHeight: 1.45 } }, "Vermelho \u00E9 o que ficou por fazer em semanas j\u00E1 fechadas; a parte s\u00F3 com contorno ainda est\u00E1 por fazer. Contorno tracejado marca carga reduzida.")));
+        React.createElement("div", { style: { fontSize: 11, color: C.ink2, marginTop: 7, lineHeight: 1.45 } }, "Verde \u00E9 o cumprido; vermelho, o que ficou por fazer em semanas j\u00E1 fechadas; a parte s\u00F3 com contorno ainda est\u00E1 por fazer. Contorno tracejado marca carga reduzida.")));
 }
 const Leg = ({ cor, t, contorno }) => (React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 6 } },
     React.createElement("span", { style: { width: 10, height: 10, display: "inline-block",

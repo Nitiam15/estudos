@@ -1,1 +1,1 @@
-{ "versao": "1.7.0", "notas": "Escolha de assuntos para manter na semana (painel da abertura da semana e atalho no checklist); visual no estilo do Claude em modo noturno; total de pontos da semana corrigido com o Firebase." }
+{ "versao": "1.7.1", "notas": "Nome dos tópicos na fonte do cabeçalho; anel colorido conforme o cumprido (vermelho a verde); gráfico de barras com verde para o cumprido e vermelho para o não cumprido." }
